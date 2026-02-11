@@ -1,0 +1,13 @@
+stages:
+  - sonar
+
+sonarcloud:
+  stage: sonar
+  image: sonarsource/sonar-scanner-cli:latest
+  variables:
+    GIT_DEPTH: "0"
+  script:
+    - sonar-scanner -Dsonar.organization=boundless -Dsonar.projectKey=boundless_boundless-be
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
