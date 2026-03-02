@@ -166,4 +166,65 @@ func tokenExpiryFromRaw(t *testing.T, token string) time.Time {
 	}
 	payloadRaw, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
-		t.Fatalf("dec
+		t.Fatalf("decode error: %v", err)
+	}
+	payloadItems := strings.Split(string(payloadRaw), "|")
+	if len(payloadItems) != 5 {
+		t.Fatalf("invalid payload: %s", string(payloadRaw))
+	}
+	expUnix, err := strconv.ParseInt(payloadItems[4], 10, 64)
+	if err != nil {
+		t.Fatalf("invalid exp: %v", err)
+	}
+	return time.Unix(expUnix, 0)
+}
+
+type testUserRepoService struct {
+	byEmail map[string]model.User
+	byID    map[string]model.User
+}
+
+func newTestUserRepoService() *testUserRepoService {
+	return &testUserRepoService{
+		byEmail: map[string]model.User{},
+		byID:    map[string]model.User{},
+	}
+}
+
+func (r *testUserRepoService) Create(ctx context.Context, user model.User) (model.User, error) {
+	email := strings.ToLower(strings.TrimSpace(user.Email))
+	if _, exists := r.byEmail[email]; exists {
+		return model.User{}, repository.ErrEmailExists
+	}
+	user.Email = email
+	r.byEmail[email] = user
+	r.byID[user.UserID] = user
+	return user, nil
+}
+
+func (r *testUserRepoService) FindByEmail(ctx context.Context, email string) (model.User, error) {
+	user, ok := r.byEmail[strings.ToLower(strings.TrimSpace(email))]
+	if !ok {
+		return model.User{}, repository.ErrUserNotFound
+	}
+	return user, nil
+}
+
+func (r *testUserRepoService) FindByID(ctx context.Context, userID string) (model.User, error) {
+	user, ok := r.byID[userID]
+	if !ok {
+		return model.User{}, repository.ErrUserNotFound
+	}
+	return user, nil
+}
+
+func (r *testUserRepoService) Update(ctx context.Context, user model.User) error {
+	if _, ok := r.byID[user.UserID]; !ok {
+		return repository.ErrUserNotFound
+	}
+	email := strings.ToLower(strings.TrimSpace(user.Email))
+	user.Email = email
+	r.byID[user.UserID] = user
+	r.byEmail[email] = user
+	return nil
+}
