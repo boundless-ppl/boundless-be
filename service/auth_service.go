@@ -267,4 +267,11 @@ func checkPassword(passwordHash, password string) bool {
 func sign(secret []byte, payload string) string {
 	mac := hmac.New(sha256.New, secret)
 	_, _ = mac.Write([]byte(payload))
-	return base64.RawURLEncoding.EncodeToString(mac.Sum(
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+func newID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return fmt.Sprintf("%x", b)
+}
