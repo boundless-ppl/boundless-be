@@ -2,17 +2,11 @@ package service
 
 import (
 	"context"
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"log"
 	"os"
-	"strconv"
-	"strings"
-	"sync"
 	"time"
 
 	"boundless-be/model"
@@ -50,10 +44,8 @@ type TokenClaims struct {
 }
 
 type AuthService struct {
-	userRepo       repository.UserRepository
-	secretKey      []byte
-	mu             sync.RWMutex
-	revokedTokenID map[string]time.Time
+	userRepo      repository.UserRepository
+	tokenProvider *HMACTokenManager
 }
 
 func NewAuthService(userRepo repository.UserRepository) *AuthService {
@@ -63,9 +55,8 @@ func NewAuthService(userRepo repository.UserRepository) *AuthService {
 	}
 
 	return &AuthService{
-		userRepo:       userRepo,
-		secretKey:      []byte(secret),
-		revokedTokenID: map[string]time.Time{},
+		userRepo:      userRepo,
+		tokenProvider: NewHMACTokenManager(secret),
 	}
 }
 
@@ -92,7 +83,7 @@ func (s *AuthService) Register(ctx context.Context, fullName, role, email, passw
 		return AuthTokens{}, ErrInvalidInput
 	}
 
-	return s.issueTokens(user.UserID, user.Role)
+	return s.tokenProvider.IssueTokens(user.UserID, user.Role)
 }
 
 func (s *AuthService) Login(ctx context.Context, email, password string) (AuthTokens, error) {
@@ -124,116 +115,19 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (AuthTo
 		return AuthTokens{}, ErrInvalidCredentials
 	}
 
-	return s.issueTokens(user.UserID, user.Role)
+	return s.tokenProvider.IssueTokens(user.UserID, user.Role)
 }
 
 func (s *AuthService) ValidateToken(token string) (string, error) {
-	claims, err := s.ValidateAccessToken(token)
-	if err != nil {
-		return "", err
-	}
-	return claims.UserID, nil
+	return s.tokenProvider.ValidateToken(token)
 }
 
 func (s *AuthService) ValidateAccessToken(token string) (TokenClaims, error) {
-	claims, err := s.parseToken(token)
-	if err != nil {
-		return TokenClaims{}, ErrInvalidToken
-	}
-	if claims.TokenType != "access" {
-		return TokenClaims{}, ErrInvalidToken
-	}
-	if s.isRevoked(claims.TokenID) {
-		return TokenClaims{}, ErrInvalidToken
-	}
-	if claims.ExpiresAt.Before(time.Now()) {
-		return TokenClaims{}, ErrInvalidToken
-	}
-	return claims, nil
+	return s.tokenProvider.ValidateAccessToken(token)
 }
 
 func (s *AuthService) Logout(token string) error {
-	claims, err := s.parseToken(token)
-	if err != nil {
-		return ErrInvalidToken
-	}
-	s.mu.Lock()
-	now := time.Now()
-	for id, exp := range s.revokedTokenID {
-		if exp.Before(now) {
-			delete(s.revokedTokenID, id)
-		}
-	}
-	s.revokedTokenID[claims.TokenID] = claims.ExpiresAt
-	s.mu.Unlock()
-	return nil
-}
-
-func (s *AuthService) issueTokens(userID, role string) (AuthTokens, error) {
-	access, err := s.createToken("access", userID, role, AccessTokenDuration)
-	if err != nil {
-		return AuthTokens{}, ErrInvalidInput
-	}
-	refresh, err := s.createToken("refresh", userID, role, RefreshTokenDuration)
-	if err != nil {
-		return AuthTokens{}, ErrInvalidInput
-	}
-	return AuthTokens{
-		AccessToken:  access,
-		RefreshToken: refresh,
-	}, nil
-}
-
-func (s *AuthService) createToken(tokenType, userID, role string, duration time.Duration) (string, error) {
-	exp := time.Now().Add(duration).Unix()
-	tokenID := newID()
-	payload := strings.Join([]string{tokenID, tokenType, userID, role, strconv.FormatInt(exp, 10)}, "|")
-	payloadEncoded := base64.RawURLEncoding.EncodeToString([]byte(payload))
-	sig := sign(s.secretKey, payloadEncoded)
-	return payloadEncoded + "." + sig, nil
-}
-
-func (s *AuthService) parseToken(token string) (TokenClaims, error) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 2 {
-		return TokenClaims{}, ErrInvalidToken
-	}
-	payloadEncoded := parts[0]
-	sig := parts[1]
-	if sign(s.secretKey, payloadEncoded) != sig {
-		return TokenClaims{}, ErrInvalidToken
-	}
-
-	payloadRaw, err := base64.RawURLEncoding.DecodeString(payloadEncoded)
-	if err != nil {
-		return TokenClaims{}, ErrInvalidToken
-	}
-
-	items := strings.Split(string(payloadRaw), "|")
-	if len(items) != 5 {
-		return TokenClaims{}, ErrInvalidToken
-	}
-
-	expUnix, err := strconv.ParseInt(items[4], 10, 64)
-	if err != nil {
-		return TokenClaims{}, ErrInvalidToken
-	}
-
-	return TokenClaims{
-		TokenID:   items[0],
-		TokenType: items[1],
-		UserID:    items[2],
-		Role:      items[3],
-		ExpiresAt: time.Unix(expUnix, 0),
-	}, nil
-}
-
-func (s *AuthService) isRevoked(tokenID string) bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	_, exists := s.revokedTokenID[tokenID]
-	return exists
+	return s.tokenProvider.Revoke(token)
 }
 
 func trackFailedLogin(user model.User, now time.Time) model.User {
@@ -262,12 +156,6 @@ func hashPassword(password string) (string, error) {
 
 func checkPassword(passwordHash, password string) bool {
 	return bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password)) == nil
-}
-
-func sign(secret []byte, payload string) string {
-	mac := hmac.New(sha256.New, secret)
-	_, _ = mac.Write([]byte(payload))
-	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
 func newID() string {
