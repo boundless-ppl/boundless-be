@@ -1,0 +1,4 @@
+/.gocache
+.DS_Store
+*.log
+.env
