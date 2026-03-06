@@ -2,3 +2,7 @@
 .DS_Store
 *.log
 .env
+artifacts/
+coverage.out
+coverage.html
+*.test

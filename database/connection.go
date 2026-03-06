@@ -6,7 +6,6 @@ import (
 	"errors"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 var ErrMissingDatabaseURL = errors.New("DATABASE_URL is required")

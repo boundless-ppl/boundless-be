@@ -8,10 +8,14 @@ import (
 	"encoding/base64"
 	"errors"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"crypto/hmac"
+	"crypto/sha256"
 )
 
 func TestMain(m *testing.M) {
@@ -47,6 +51,28 @@ func TestRegisterWeakPasswordService(t *testing.T) {
 	authService := service.NewAuthService(userRepo)
 
 	_, err := authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", "weak")
+	if !errors.Is(err, service.ErrInvalidInput) {
+		t.Fatalf("expected %v, got %v", service.ErrInvalidInput, err)
+	}
+}
+
+func TestRegisterDuplicateEmailService(t *testing.T) {
+	userRepo := newTestUserRepoService()
+	authService := service.NewAuthService(userRepo)
+
+	_, _ = authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", "Secret123!")
+	_, err := authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", "Secret123!")
+	if !errors.Is(err, repository.ErrEmailExists) {
+		t.Fatalf("expected %v, got %v", repository.ErrEmailExists, err)
+	}
+}
+
+func TestRegisterUnexpectedRepoErrorService(t *testing.T) {
+	userRepo := newTestUserRepoService()
+	userRepo.createErr = errors.New("db down")
+	authService := service.NewAuthService(userRepo)
+
+	_, err := authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", "Secret123!")
 	if !errors.Is(err, service.ErrInvalidInput) {
 		t.Fatalf("expected %v, got %v", service.ErrInvalidInput, err)
 	}
@@ -102,6 +128,18 @@ func TestLoginWrongPasswordService(t *testing.T) {
 	}
 }
 
+func TestLoginUpdateErrorService(t *testing.T) {
+	userRepo := newTestUserRepoService()
+	authService := service.NewAuthService(userRepo)
+
+	_, _ = authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", "Secret123!")
+	userRepo.updateErr = errors.New("update failed")
+	_, err := authService.Login(context.Background(), "alice@example.com", "Secret123!")
+	if !errors.Is(err, service.ErrInvalidCredentials) {
+		t.Fatalf("expected %v, got %v", service.ErrInvalidCredentials, err)
+	}
+}
+
 func TestTokenLifetimeService(t *testing.T) {
 	userRepo := newTestUserRepoService()
 	authService := service.NewAuthService(userRepo)
@@ -129,6 +167,9 @@ func TestValidateTokenAndLogoutService(t *testing.T) {
 	authService := service.NewAuthService(userRepo)
 
 	tokens, _ := authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", "Secret123!")
+	if _, err := authService.ValidateToken(tokens.AccessToken); err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
 	if _, err := authService.ValidateAccessToken(tokens.AccessToken); err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
@@ -137,6 +178,105 @@ func TestValidateTokenAndLogoutService(t *testing.T) {
 	}
 	if _, err := authService.ValidateAccessToken(tokens.AccessToken); !errors.Is(err, service.ErrInvalidToken) {
 		t.Fatalf("expected %v, got %v", service.ErrInvalidToken, err)
+	}
+}
+
+func TestValidateTokenInvalidService(t *testing.T) {
+	userRepo := newTestUserRepoService()
+	authService := service.NewAuthService(userRepo)
+
+	if _, err := authService.ValidateToken("invalid-token"); !errors.Is(err, service.ErrInvalidToken) {
+		t.Fatalf("expected %v, got %v", service.ErrInvalidToken, err)
+	}
+}
+
+func TestValidateAccessTokenRejectRefreshService(t *testing.T) {
+	userRepo := newTestUserRepoService()
+	authService := service.NewAuthService(userRepo)
+
+	tokens, _ := authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", "Secret123!")
+	if _, err := authService.ValidateAccessToken(tokens.RefreshToken); !errors.Is(err, service.ErrInvalidToken) {
+		t.Fatalf("expected %v, got %v", service.ErrInvalidToken, err)
+	}
+}
+
+func TestValidateAccessTokenExpiredService(t *testing.T) {
+	userRepo := newTestUserRepoService()
+	authService := service.NewAuthService(userRepo)
+	secret := os.Getenv("AUTH_SECRET")
+	expired := signedToken(secret, "tid-expired", "access", "u1", "admin", time.Now().Add(-time.Minute).Unix())
+
+	if _, err := authService.ValidateAccessToken(expired); !errors.Is(err, service.ErrInvalidToken) {
+		t.Fatalf("expected %v, got %v", service.ErrInvalidToken, err)
+	}
+}
+
+func TestLogoutInvalidTokenService(t *testing.T) {
+	userRepo := newTestUserRepoService()
+	authService := service.NewAuthService(userRepo)
+
+	if err := authService.Logout("bad.token.format"); !errors.Is(err, service.ErrInvalidToken) {
+		t.Fatalf("expected %v, got %v", service.ErrInvalidToken, err)
+	}
+}
+
+func TestValidateTokenMalformedPayloadService(t *testing.T) {
+	userRepo := newTestUserRepoService()
+	authService := service.NewAuthService(userRepo)
+	secret := os.Getenv("AUTH_SECRET")
+
+	// payload has invalid exp field to hit parse-int error path.
+	payload := base64.RawURLEncoding.EncodeToString([]byte("id|access|u1|admin|not-number"))
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(payload))
+	sig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	token := payload + "." + sig
+
+	if _, err := authService.ValidateToken(token); !errors.Is(err, service.ErrInvalidToken) {
+		t.Fatalf("expected %v, got %v", service.ErrInvalidToken, err)
+	}
+}
+
+func TestValidateTokenInvalidPartCountService(t *testing.T) {
+	userRepo := newTestUserRepoService()
+	authService := service.NewAuthService(userRepo)
+
+	if _, err := authService.ValidateToken("one-part-only"); !errors.Is(err, service.ErrInvalidToken) {
+		t.Fatalf("expected %v, got %v", service.ErrInvalidToken, err)
+	}
+}
+
+func TestLogoutCleansExpiredRevocationsService(t *testing.T) {
+	userRepo := newTestUserRepoService()
+	authService := service.NewAuthService(userRepo)
+	secret := os.Getenv("AUTH_SECRET")
+
+	expired := signedToken(secret, "expired-id", "access", "u1", "admin", time.Now().Add(-time.Minute).Unix())
+	valid := signedToken(secret, "valid-id", "access", "u1", "admin", time.Now().Add(time.Minute).Unix())
+
+	if err := authService.Logout(expired); err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if err := authService.Logout(valid); err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+}
+
+func TestNewAuthServiceMissingSecretService(t *testing.T) {
+	if os.Getenv("BE_CRASHER") == "1" {
+		_ = os.Unsetenv("AUTH_SECRET")
+		_ = service.NewAuthService(newTestUserRepoService())
+		return
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=TestNewAuthServiceMissingSecretService")
+	cmd.Env = append(os.Environ(), "BE_CRASHER=1")
+	err := cmd.Run()
+	if err == nil {
+		t.Fatal("expected subprocess to fail")
+	}
+	if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.Success() {
+		t.Fatalf("expected non-zero exit, got %v", err)
 	}
 }
 
@@ -180,8 +320,10 @@ func tokenExpiryFromRaw(t *testing.T, token string) time.Time {
 }
 
 type testUserRepoService struct {
-	byEmail map[string]model.User
-	byID    map[string]model.User
+	byEmail   map[string]model.User
+	byID      map[string]model.User
+	updateErr error
+	createErr error
 }
 
 func newTestUserRepoService() *testUserRepoService {
@@ -192,6 +334,9 @@ func newTestUserRepoService() *testUserRepoService {
 }
 
 func (r *testUserRepoService) Create(ctx context.Context, user model.User) (model.User, error) {
+	if r.createErr != nil {
+		return model.User{}, r.createErr
+	}
 	email := strings.ToLower(strings.TrimSpace(user.Email))
 	if _, exists := r.byEmail[email]; exists {
 		return model.User{}, repository.ErrEmailExists
@@ -219,6 +364,9 @@ func (r *testUserRepoService) FindByID(ctx context.Context, userID string) (mode
 }
 
 func (r *testUserRepoService) Update(ctx context.Context, user model.User) error {
+	if r.updateErr != nil {
+		return r.updateErr
+	}
 	if _, ok := r.byID[user.UserID]; !ok {
 		return repository.ErrUserNotFound
 	}
@@ -227,4 +375,13 @@ func (r *testUserRepoService) Update(ctx context.Context, user model.User) error
 	r.byID[user.UserID] = user
 	r.byEmail[email] = user
 	return nil
+}
+
+func signedToken(secret, tokenID, tokenType, userID, role string, expUnix int64) string {
+	payload := strings.Join([]string{tokenID, tokenType, userID, role, strconv.FormatInt(expUnix, 10)}, "|")
+	payloadEncoded := base64.RawURLEncoding.EncodeToString([]byte(payload))
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(payloadEncoded))
+	sig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return payloadEncoded + "." + sig
 }
