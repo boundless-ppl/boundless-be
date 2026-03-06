@@ -1,6 +1,8 @@
 package service_test
 
 import (
+	"boundless-be/dto"
+	"boundless-be/errs"
 	"boundless-be/model"
 	"boundless-be/service"
 	"context"
@@ -34,14 +36,14 @@ func (r *testUniversityRepo) FindAll(ctx context.Context) ([]model.University, e
 func (r *testUniversityRepo) FindByID(ctx context.Context, id string) (model.University, error) {
 	u, ok := r.data[id]
 	if !ok {
-		return model.University{}, nil
+		return model.University{}, errs.ErrUniversityNotFound
 	}
 	return u, nil
 }
 
 func (r *testUniversityRepo) Update(ctx context.Context, u model.University) (model.University, error) {
 	if _, ok := r.data[u.ID]; !ok {
-		return model.University{}, nil
+		return model.University{}, errs.ErrUniversityNotFound
 	}
 	r.data[u.ID] = u
 	return u, nil
@@ -49,7 +51,7 @@ func (r *testUniversityRepo) Update(ctx context.Context, u model.University) (mo
 
 func (r *testUniversityRepo) Delete(ctx context.Context, id string) error {
 	if _, ok := r.data[id]; !ok {
-		return nil
+		return errs.ErrUniversityNotFound
 	}
 	delete(r.data, id)
 	return nil
@@ -59,12 +61,11 @@ func TestCreateUniversity_ShouldSuccess(t *testing.T) {
 	repo := newTestUniversityRepo()
 	svc := service.NewUniversityService(repo)
 
-	input := model.University{
-		ID:        "1",
+	input := dto.CreateUniversityRequest{
 		NegaraID:  "INA",
 		Nama:      "ITB",
 		Kota:      "Bandung",
-		Tipe:      model.NATIONAL,
+		Tipe:      string(model.NATIONAL),
 		Deskripsi: "Institut Teknologi Bandung",
 		Website:   "https://itb.ac.id",
 	}
@@ -74,7 +75,7 @@ func TestCreateUniversity_ShouldSuccess(t *testing.T) {
 		t.Fatalf("expected nil error, got %v", err)
 	}
 
-	if result.ID != "1" {
+	if result.Nama != "ITB" {
 		t.Fatal("expected university to be created")
 	}
 }
@@ -83,36 +84,33 @@ func TestCreateUniversity_ShouldFailIfAnyRequiredFieldEmpty(t *testing.T) {
 
 	tests := []struct {
 		name  string
-		input model.University
+		input dto.CreateUniversityRequest
 	}{
 		{
 			name: "nama kosong",
-			input: model.University{
-				ID:        "1",
+			input: dto.CreateUniversityRequest{
 				NegaraID:  "INA",
 				Nama:      "",
 				Kota:      "Bandung",
-				Tipe:      model.NATIONAL,
+				Tipe:      string(model.NATIONAL),
 				Deskripsi: "Institut Teknologi Bandung",
 				Website:   "https://itb.ac.id",
 			},
 		},
 		{
 			name: "kota kosong",
-			input: model.University{
-				ID:        "1",
+			input: dto.CreateUniversityRequest{
 				NegaraID:  "INA",
 				Nama:      "ITB",
 				Kota:      "",
-				Tipe:      model.NATIONAL,
+				Tipe:      string(model.NATIONAL),
 				Deskripsi: "Institut Teknologi Bandung",
 				Website:   "https://itb.ac.id",
 			},
 		},
 		{
 			name: "tipe kosong",
-			input: model.University{
-				ID:        "1",
+			input: dto.CreateUniversityRequest{
 				NegaraID:  "INA",
 				Nama:      "ITB",
 				Kota:      "Bandung",
@@ -123,24 +121,22 @@ func TestCreateUniversity_ShouldFailIfAnyRequiredFieldEmpty(t *testing.T) {
 		},
 		{
 			name: "deskripsi kosong",
-			input: model.University{
-				ID:        "1",
+			input: dto.CreateUniversityRequest{
 				NegaraID:  "INA",
 				Nama:      "ITB",
 				Kota:      "Bandung",
-				Tipe:      model.NATIONAL,
+				Tipe:      string(model.NATIONAL),
 				Deskripsi: "",
 				Website:   "https://itb.ac.id",
 			},
 		},
 		{
 			name: "website kosong",
-			input: model.University{
-				ID:        "1",
+			input: dto.CreateUniversityRequest{
 				NegaraID:  "INA",
 				Nama:      "ITB",
 				Kota:      "Bandung",
-				Tipe:      model.NATIONAL,
+				Tipe:      string(model.NATIONAL),
 				Deskripsi: "Institut Teknologi Bandung",
 				Website:   "",
 			},
@@ -155,8 +151,8 @@ func TestCreateUniversity_ShouldFailIfAnyRequiredFieldEmpty(t *testing.T) {
 
 			_, err := svc.CreateUniversity(context.Background(), tt.input)
 
-			if !errors.Is(err, service.ErrInvalidInput) {
-				t.Fatalf("expected %v, got %v", service.ErrInvalidInput, err)
+			if !errors.Is(err, errs.ErrInvalidInput) {
+				t.Fatalf("expected %v, got %v", errs.ErrInvalidInput, err)
 			}
 		})
 	}
@@ -211,8 +207,8 @@ func TestGetUniversityByID_ShouldReturnErrorIfNotFound(t *testing.T) {
 
 	_, err := svc.GetUniversityByID(context.Background(), "999")
 
-	if !errors.Is(err, service.ErrUniversityNotFound) {
-		t.Fatalf("expected %v, got %v", service.ErrUniversityNotFound, err)
+	if !errors.Is(err, errs.ErrUniversityNotFound) {
+		t.Fatalf("expected %v, got %v", errs.ErrUniversityNotFound, err)
 	}
 }
 
@@ -220,15 +216,14 @@ func TestUpdateUniversity_ShouldFailIfNotFound(t *testing.T) {
 	repo := newTestUniversityRepo()
 	svc := service.NewUniversityService(repo)
 
-	update := model.University{
-		ID:   "999",
+	update := dto.UpdateUniversityRequest{
 		Nama: "Random Updated",
 	}
 
-	_, err := svc.UpdateUniversity(context.Background(), update)
+	_, err := svc.UpdateUniversity(context.Background(), "999", update)
 
-	if !errors.Is(err, service.ErrUniversityNotFound) {
-		t.Fatalf("expected %v, got %v", service.ErrUniversityNotFound, err)
+	if !errors.Is(err, errs.ErrUniversityNotFound) {
+		t.Fatalf("expected %v, got %v", errs.ErrUniversityNotFound, err)
 	}
 }
 
@@ -243,12 +238,11 @@ func TestUpdateUniversity_ShouldPatchFields(t *testing.T) {
 
 	svc := service.NewUniversityService(repo)
 
-	updatePayload := model.University{
-		ID:   "1",
+	updatePayload := dto.UpdateUniversityRequest{
 		Nama: "ITB Updated",
 	}
 
-	updated, err := svc.UpdateUniversity(context.Background(), updatePayload)
+	updated, err := svc.UpdateUniversity(context.Background(), "1", updatePayload)
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
@@ -280,7 +274,7 @@ func TestDeleteUniversity_ShouldFailIfNotFound(t *testing.T) {
 
 	err := svc.DeleteUniversity(context.Background(), "999")
 
-	if !errors.Is(err, service.ErrUniversityNotFound) {
-		t.Fatalf("expected %v, got %v", service.ErrUniversityNotFound, err)
+	if !errors.Is(err, errs.ErrUniversityNotFound) {
+		t.Fatalf("expected %v, got %v", errs.ErrUniversityNotFound, err)
 	}
 }
