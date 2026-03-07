@@ -31,7 +31,11 @@ func main() {
 
 	log.Println("database connected")
 	userRepo := repository.NewUserRepository(db)
-	handler := api.NewHandler(userRepo)
+	univRepo := repository.NewUniversityRepository(db)
+	handler := api.NewHandler(api.Dependencies{
+		UserRepo: userRepo,
+		UnivRepo: univRepo,
+	})
 
 	port := os.Getenv("PORT")
 	if port == "" {

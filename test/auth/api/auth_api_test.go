@@ -74,7 +74,9 @@ func (r *testUserRepo) Update(ctx context.Context, user model.User) error {
 }
 
 func TestRootRouteSuccessApi(t *testing.T) {
-	handler := api.NewHandler(newTestUserRepo())
+	handler := api.NewHandler(api.Dependencies{
+		UserRepo: newTestUserRepo(),
+	})
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -89,7 +91,9 @@ func TestRootRouteSuccessApi(t *testing.T) {
 }
 
 func TestUnknownRouteReturnsNotFoundApi(t *testing.T) {
-	handler := api.NewHandler(newTestUserRepo())
+	handler := api.NewHandler(api.Dependencies{
+		UserRepo: newTestUserRepo(),
+	})
 	req := httptest.NewRequest(http.MethodGet, "/not-found", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -100,7 +104,9 @@ func TestUnknownRouteReturnsNotFoundApi(t *testing.T) {
 }
 
 func TestLoginRedirectsToRootUnderThreeSecondsApi(t *testing.T) {
-	handler := api.NewHandler(newTestUserRepo())
+	handler := api.NewHandler(api.Dependencies{
+		UserRepo: newTestUserRepo(),
+	})
 	registerUser(t, handler, "admin@example.com", "admin")
 	body, _ := json.Marshal(dto.LoginRequest{Email: "admin@example.com", Password: "Secret123!"})
 	req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewBuffer(body))
@@ -123,7 +129,9 @@ func TestLoginRedirectsToRootUnderThreeSecondsApi(t *testing.T) {
 }
 
 func TestLogoutRevokesTokenApi(t *testing.T) {
-	handler := api.NewHandler(newTestUserRepo())
+	handler := api.NewHandler(api.Dependencies{
+		UserRepo: newTestUserRepo(),
+	})
 	registerUser(t, handler, "admin@example.com", "admin")
 	tokens := loginUser(t, handler, "admin@example.com")
 
