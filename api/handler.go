@@ -9,6 +9,7 @@ import (
 type Dependencies struct {
 	UserRepo repository.UserRepository
 	UnivRepo repository.UniversityRepository
+	RecRepo  repository.RecommendationRepository
 }
 
 func NewHandler(dep Dependencies) *gin.Engine {
@@ -23,6 +24,10 @@ func NewHandler(dep Dependencies) *gin.Engine {
 
 	if dep.UnivRepo != nil {
 		registerUnivRoutes(router, dep.UnivRepo)
+	}
+
+	if dep.RecRepo != nil && dep.UserRepo != nil {
+		registerRecommendationRoutes(router, dep.RecRepo, dep.UserRepo)
 	}
 
 	return router
