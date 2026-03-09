@@ -6,14 +6,24 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func NewHandler(userRepo repository.UserRepository) *gin.Engine {
+type Dependencies struct {
+	UserRepo repository.UserRepository
+	UnivRepo repository.UniversityRepository
+}
+
+func NewHandler(dep Dependencies) *gin.Engine {
 	router := gin.New()
 	router.Use(gin.Recovery())
 
 	router.GET("/", func(ctx *gin.Context) {
 		ctx.String(200, "hi\n")
 	})
-	registerAuthRoutes(router, userRepo)
+
+	registerAuthRoutes(router, dep.UserRepo)
+
+	if dep.UnivRepo != nil {
+		registerUnivRoutes(router, dep.UnivRepo)
+	}
 
 	return router
 }
