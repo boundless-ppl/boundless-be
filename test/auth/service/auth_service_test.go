@@ -27,12 +27,9 @@ func TestRegisterSuccessService(t *testing.T) {
 	userRepo := newTestUserRepoService()
 	authService := service.NewAuthService(userRepo)
 
-	tokens, err := authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", "Secret123!")
+	err := authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", "Secret123!")
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
-	}
-	if tokens.AccessToken == "" || tokens.RefreshToken == "" {
-		t.Fatal("expected non-empty tokens")
 	}
 }
 
@@ -40,7 +37,7 @@ func TestRegisterInvalidEmailService(t *testing.T) {
 	userRepo := newTestUserRepoService()
 	authService := service.NewAuthService(userRepo)
 
-	_, err := authService.Register(context.Background(), "Alice Doe", "admin", "alice", "Secret123!")
+	err := authService.Register(context.Background(), "Alice Doe", "admin", "alice", "Secret123!")
 	if !errors.Is(err, service.ErrInvalidInput) {
 		t.Fatalf("expected %v, got %v", service.ErrInvalidInput, err)
 	}
@@ -50,7 +47,7 @@ func TestRegisterWeakPasswordService(t *testing.T) {
 	userRepo := newTestUserRepoService()
 	authService := service.NewAuthService(userRepo)
 
-	_, err := authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", "weak")
+	err := authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", "weak")
 	if !errors.Is(err, service.ErrInvalidInput) {
 		t.Fatalf("expected %v, got %v", service.ErrInvalidInput, err)
 	}
@@ -60,8 +57,8 @@ func TestRegisterDuplicateEmailService(t *testing.T) {
 	userRepo := newTestUserRepoService()
 	authService := service.NewAuthService(userRepo)
 
-	_, _ = authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", "Secret123!")
-	_, err := authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", "Secret123!")
+	_ = authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", "Secret123!")
+	err := authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", "Secret123!")
 	if !errors.Is(err, repository.ErrEmailExists) {
 		t.Fatalf("expected %v, got %v", repository.ErrEmailExists, err)
 	}
@@ -72,7 +69,7 @@ func TestRegisterUnexpectedRepoErrorService(t *testing.T) {
 	userRepo.createErr = errors.New("db down")
 	authService := service.NewAuthService(userRepo)
 
-	_, err := authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", "Secret123!")
+	err := authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", "Secret123!")
 	if !errors.Is(err, service.ErrInvalidInput) {
 		t.Fatalf("expected %v, got %v", service.ErrInvalidInput, err)
 	}
@@ -83,7 +80,7 @@ func TestPasswordStoredAsHashService(t *testing.T) {
 	authService := service.NewAuthService(userRepo)
 	rawPassword := "Secret123!"
 
-	_, err := authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", rawPassword)
+	err := authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", rawPassword)
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
@@ -101,7 +98,7 @@ func TestLoginSuccessUnderThreeSecondsService(t *testing.T) {
 	userRepo := newTestUserRepoService()
 	authService := service.NewAuthService(userRepo)
 
-	_, _ = authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", "Secret123!")
+	_ = authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", "Secret123!")
 	start := time.Now()
 	tokens, err := authService.Login(context.Background(), "alice@example.com", "Secret123!")
 	elapsed := time.Since(start)
@@ -121,7 +118,7 @@ func TestLoginWrongPasswordService(t *testing.T) {
 	userRepo := newTestUserRepoService()
 	authService := service.NewAuthService(userRepo)
 
-	_, _ = authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", "Secret123!")
+	_ = authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", "Secret123!")
 	_, err := authService.Login(context.Background(), "alice@example.com", "Wrong123!")
 	if !errors.Is(err, service.ErrInvalidCredentials) {
 		t.Fatalf("expected %v, got %v", service.ErrInvalidCredentials, err)
@@ -132,7 +129,7 @@ func TestLoginUpdateErrorService(t *testing.T) {
 	userRepo := newTestUserRepoService()
 	authService := service.NewAuthService(userRepo)
 
-	_, _ = authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", "Secret123!")
+	_ = authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", "Secret123!")
 	userRepo.updateErr = errors.New("update failed")
 	_, err := authService.Login(context.Background(), "alice@example.com", "Secret123!")
 	if !errors.Is(err, service.ErrInvalidCredentials) {
@@ -144,7 +141,12 @@ func TestTokenLifetimeService(t *testing.T) {
 	userRepo := newTestUserRepoService()
 	authService := service.NewAuthService(userRepo)
 
-	tokens, err := authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", "Secret123!")
+	err := authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", "Secret123!")
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+
+	tokens, err := authService.Login(context.Background(), "alice@example.com", "Secret123!")
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
@@ -166,7 +168,13 @@ func TestValidateTokenAndLogoutService(t *testing.T) {
 	userRepo := newTestUserRepoService()
 	authService := service.NewAuthService(userRepo)
 
-	tokens, _ := authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", "Secret123!")
+	if err := authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", "Secret123!"); err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	tokens, err := authService.Login(context.Background(), "alice@example.com", "Secret123!")
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
 	if _, err := authService.ValidateToken(tokens.AccessToken); err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
@@ -194,7 +202,13 @@ func TestValidateAccessTokenRejectRefreshService(t *testing.T) {
 	userRepo := newTestUserRepoService()
 	authService := service.NewAuthService(userRepo)
 
-	tokens, _ := authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", "Secret123!")
+	if err := authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", "Secret123!"); err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	tokens, err := authService.Login(context.Background(), "alice@example.com", "Secret123!")
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
 	if _, err := authService.ValidateAccessToken(tokens.RefreshToken); !errors.Is(err, service.ErrInvalidToken) {
 		t.Fatalf("expected %v, got %v", service.ErrInvalidToken, err)
 	}
@@ -284,7 +298,7 @@ func TestLoginAttemptLimitAndLockService(t *testing.T) {
 	userRepo := newTestUserRepoService()
 	authService := service.NewAuthService(userRepo)
 
-	_, _ = authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", "Secret123!")
+	_ = authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", "Secret123!")
 	for i := 0; i < 4; i++ {
 		_, err := authService.Login(context.Background(), "alice@example.com", "Wrong123!")
 		if !errors.Is(err, service.ErrInvalidCredentials) {

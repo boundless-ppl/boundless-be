@@ -117,11 +117,15 @@ func TestLoginRedirectsToRootUnderThreeSecondsApi(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	elapsed := time.Since(start)
 
-	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("expected status %d, got %d", http.StatusSeeOther, rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
 	}
-	if rec.Header().Get("Location") != "/" {
-		t.Fatalf("expected redirect to /, got %s", rec.Header().Get("Location"))
+	var got dto.AuthResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if got.AccessToken == "" || got.RefreshToken == "" {
+		t.Fatal("expected non-empty tokens")
 	}
 	if elapsed > 3*time.Second {
 		t.Fatalf("expected response under 3 seconds, got %v", elapsed)
@@ -157,7 +161,6 @@ func registerUser(t *testing.T, handler http.Handler, email, role string) {
 	t.Helper()
 	body, _ := json.Marshal(dto.RegisterRequest{
 		NamaLengkap: "Test User",
-		Role:        role,
 		Email:       email,
 		Password:    "Secret123!",
 	})
@@ -180,8 +183,8 @@ func loginUser(t *testing.T, handler http.Handler, email string) dto.AuthRespons
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("expected status %d, got %d", http.StatusSeeOther, rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
 	}
 	var tokens dto.AuthResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &tokens); err != nil {
