@@ -255,6 +255,48 @@ func TestUpdateUniversitySuccessController(t *testing.T) {
 	}
 }
 
+func TestUpdateUniversityInvalidIDController(t *testing.T) {
+	repo := &fakeUniversityRepository{}
+	router := setupRouter(repo)
+
+	req := httptest.NewRequest(http.MethodPatch, "/universities/invalid-id", bytes.NewBufferString(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected %d got %d", http.StatusBadRequest, rec.Code)
+	}
+}
+
+func TestUpdateUniversityNotFoundController(t *testing.T) {
+	id := uuid.NewString()
+	repo := &fakeUniversityRepository{updateErr: errs.ErrUniversityNotFound}
+	router := setupRouter(repo)
+
+	req := httptest.NewRequest(http.MethodPatch, "/universities/"+id, bytes.NewBufferString(`{"nama":"Updated"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected %d got %d", http.StatusNotFound, rec.Code)
+	}
+}
+
+func TestDeleteUniversityInvalidIDController(t *testing.T) {
+	repo := &fakeUniversityRepository{}
+	router := setupRouter(repo)
+
+	req := httptest.NewRequest(http.MethodDelete, "/universities/invalid-id", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected %d got %d", http.StatusBadRequest, rec.Code)
+	}
+}
+
 func TestDeleteUniversitySuccessController(t *testing.T) {
 	id := uuid.NewString()
 

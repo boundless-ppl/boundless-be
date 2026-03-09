@@ -11,12 +11,14 @@ import (
 
 var ErrMissingDatabaseURL = errors.New("DATABASE_URL is required")
 
+var databaseOpen = sql.Open
+
 func NewConnection(databaseURL string) (*sql.DB, error) {
 	if databaseURL == "" {
 		return nil, ErrMissingDatabaseURL
 	}
 
-	db, err := sql.Open("pgx", databaseURL)
+	db, err := databaseOpen("pgx", databaseURL)
 	if err != nil {
 		return nil, err
 	}
