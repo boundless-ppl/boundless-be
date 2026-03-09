@@ -14,7 +14,7 @@ import (
 )
 
 type AuthService interface {
-	Register(ctx context.Context, fullName, role, email, password string) (service.AuthTokens, error)
+	Register(ctx context.Context, fullName, role, email, password string) error
 	Login(ctx context.Context, email, password string) (service.AuthTokens, error)
 	Logout(token string) error
 }
@@ -34,7 +34,8 @@ func (c *AuthController) Register(ctx *gin.Context) {
 		return
 	}
 
-	tokens, err := c.authService.Register(ctx.Request.Context(), req.NamaLengkap, req.Role, req.Email, req.Password)
+	const defaultRole = "user"
+	err := c.authService.Register(ctx.Request.Context(), req.NamaLengkap, defaultRole, req.Email, req.Password)
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrInvalidInput):
@@ -47,9 +48,8 @@ func (c *AuthController) Register(ctx *gin.Context) {
 		return
 	}
 
-	ctx.JSON(http.StatusCreated, dto.AuthResponse{
-		AccessToken:  tokens.AccessToken,
-		RefreshToken: tokens.RefreshToken,
+	ctx.JSON(http.StatusCreated, dto.MessageResponse{
+		Message: "user registered successfully",
 	})
 }
 
@@ -66,8 +66,7 @@ func (c *AuthController) Login(ctx *gin.Context) {
 		return
 	}
 
-	ctx.Header("Location", "/")
-	ctx.JSON(http.StatusSeeOther, dto.AuthResponse{
+	ctx.JSON(http.StatusOK, dto.AuthResponse{
 		AccessToken:  tokens.AccessToken,
 		RefreshToken: tokens.RefreshToken,
 	})
