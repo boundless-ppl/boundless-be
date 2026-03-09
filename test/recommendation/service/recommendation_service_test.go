@@ -3,6 +3,7 @@ package service_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"mime/multipart"
 	"net/http/httptest"
 	"os"
@@ -25,6 +26,8 @@ type fakeRecommendationRepo struct {
 
 	createSubmissionParams repository.CreateSubmissionParams
 	createSubmissionErr    error
+	updatedStatuses        []model.RecommendationStatus
+	createdResultRows      []model.RecommendationResult
 
 	detail repository.SubmissionDetail
 }
@@ -57,10 +60,12 @@ func (f *fakeRecommendationRepo) CreateSubmission(ctx context.Context, params re
 }
 
 func (f *fakeRecommendationRepo) UpdateSubmissionStatus(ctx context.Context, submissionID, userID string, status model.RecommendationStatus) error {
+	f.updatedStatuses = append(f.updatedStatuses, status)
 	return nil
 }
 
 func (f *fakeRecommendationRepo) CreateResultSet(ctx context.Context, submissionID string, generatedAt time.Time, results []model.RecommendationResult) (model.RecommendationResultSet, error) {
+	f.createdResultRows = append(f.createdResultRows, results...)
 	return model.RecommendationResultSet{}, nil
 }
 
@@ -227,5 +232,166 @@ func TestUploadDocumentServiceAllowsSupportedExtensions(t *testing.T) {
 				t.Fatalf("expected nil error for %s, got %v", tt.filename, err)
 			}
 		})
+	}
+}
+
+type fakeRecommendationAIClient struct {
+	profileResponse    dto.GlobalMatchAIRecommendationResponse
+	transcriptResponse dto.GlobalMatchAIRecommendationResponse
+	cvResponse         dto.GlobalMatchAIRecommendationResponse
+	err                error
+}
+
+func (f *fakeRecommendationAIClient) RecommendProfile(ctx context.Context, req dto.AIProfileRecommendationRequest) (dto.GlobalMatchAIRecommendationResponse, error) {
+	if f.err != nil {
+		return dto.GlobalMatchAIRecommendationResponse{}, f.err
+	}
+	return f.profileResponse, nil
+}
+
+func (f *fakeRecommendationAIClient) RecommendTranscript(ctx context.Context, req dto.AITranscriptRecommendationRequest) (dto.GlobalMatchAIRecommendationResponse, error) {
+	if f.err != nil {
+		return dto.GlobalMatchAIRecommendationResponse{}, f.err
+	}
+	return f.transcriptResponse, nil
+}
+
+func (f *fakeRecommendationAIClient) RecommendCV(ctx context.Context, req dto.AICVRecommendationRequest) (dto.GlobalMatchAIRecommendationResponse, error) {
+	if f.err != nil {
+		return dto.GlobalMatchAIRecommendationResponse{}, f.err
+	}
+	return f.cvResponse, nil
+}
+
+func TestCreateProfileRecommendationServiceSuccess(t *testing.T) {
+	t.Setenv("DOCUMENT_STORAGE_DIR", t.TempDir())
+
+	repo := &fakeRecommendationRepo{}
+	aiClient := &fakeRecommendationAIClient{
+		profileResponse: dto.GlobalMatchAIRecommendationResponse{
+			SelectionReasoning: "strong fit",
+			TopRecommendations: []dto.GlobalMatchAITopRecommendationResponse{
+				{
+					Rank:                       1,
+					UniversityName:             "University A",
+					ProgramName:                "Computer Science",
+					Country:                    "Japan",
+					FitScore:                   90,
+					AdmissionChanceScore:       75,
+					OverallRecommendationScore: 88,
+					FitLevel:                   "high",
+					AdmissionDifficulty:        "moderate",
+					Overview:                   "overview",
+					WhyThisUniversity:          "why university",
+					WhyThisProgram:             "why program",
+					PreferenceReasoning:        []string{"matches country"},
+					MatchEvidence:              []string{"good grades"},
+					ScholarshipRecommendations: []dto.GlobalMatchAIScholarshipRecommendationResponse{{
+						ScholarshipName: "MEXT",
+					}},
+					Pros: []string{"strong lab"},
+					Cons: []string{"competitive"},
+				},
+			},
+		},
+	}
+	svc := service.NewRecommendationServiceWithDeps(repo, service.NewLocalDocumentStorage(t.TempDir(), ""), aiClient)
+
+	out, err := svc.CreateProfileRecommendation(context.Background(), "user-1", dto.CreateProfileRecommendationRequest{
+		TranscriptFile: makeFileHeader(t, "transcript_file", "transcript.pdf", []byte("%PDF-1.7 transcript")),
+		CVFile:         makeFileHeader(t, "cv_file", "cv.pdf", []byte("%PDF-1.7 cv")),
+		RecommendationPreferenceInput: dto.RecommendationPreferenceInput{
+			Countries:   []string{"Japan"},
+			DegreeLevel: "Master",
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if out.Status != model.RecommendationStatusCompleted {
+		t.Fatalf("expected completed, got %s", out.Status)
+	}
+	if out.Result == nil || len(out.Result.TopRecommendations) != 1 {
+		t.Fatalf("expected AI result, got %#v", out.Result)
+	}
+	if len(repo.createdResultRows) != 1 {
+		t.Fatalf("expected one result row, got %d", len(repo.createdResultRows))
+	}
+	if len(repo.createSubmissionParams.Preferences) != 2 {
+		t.Fatalf("expected flattened preferences, got %d", len(repo.createSubmissionParams.Preferences))
+	}
+	if len(repo.updatedStatuses) == 0 || repo.updatedStatuses[len(repo.updatedStatuses)-1] != model.RecommendationStatusCompleted {
+		t.Fatalf("expected completed status update, got %#v", repo.updatedStatuses)
+	}
+}
+
+func TestCreateTranscriptRecommendationServiceMarksFailedWhenAIRequestFails(t *testing.T) {
+	repo := &fakeRecommendationRepo{}
+	aiClient := &fakeRecommendationAIClient{err: errors.New("boom")}
+	svc := service.NewRecommendationServiceWithDeps(repo, service.NewLocalDocumentStorage(t.TempDir(), ""), aiClient)
+
+	_, err := svc.CreateTranscriptRecommendation(context.Background(), "user-1", dto.CreateTranscriptRecommendationRequest{
+		TranscriptFile: makeFileHeader(t, "transcript_file", "transcript.pdf", []byte("%PDF-1.7 transcript")),
+	})
+	if !errors.Is(err, errs.ErrExternalService) {
+		t.Fatalf("expected %v, got %v", errs.ErrExternalService, err)
+	}
+	if len(repo.updatedStatuses) == 0 || repo.updatedStatuses[0] != model.RecommendationStatusFailed {
+		t.Fatalf("expected failed status update, got %#v", repo.updatedStatuses)
+	}
+}
+
+func TestCreateCVRecommendationServiceSuccess(t *testing.T) {
+	repo := &fakeRecommendationRepo{}
+	aiClient := &fakeRecommendationAIClient{
+		cvResponse: dto.GlobalMatchAIRecommendationResponse{
+			SelectionReasoning: "cv fit",
+			TopRecommendations: []dto.GlobalMatchAITopRecommendationResponse{{
+				Rank:                       1,
+				UniversityName:             "University C",
+				ProgramName:                "Data Science",
+				Country:                    "Singapore",
+				FitScore:                   85,
+				AdmissionChanceScore:       72,
+				OverallRecommendationScore: 81,
+				FitLevel:                   "high",
+				AdmissionDifficulty:        "moderate",
+				Overview:                   "overview",
+				WhyThisUniversity:          "why university",
+				WhyThisProgram:             "why program",
+			}},
+		},
+	}
+	svc := service.NewRecommendationServiceWithDeps(repo, service.NewLocalDocumentStorage(t.TempDir(), ""), aiClient)
+
+	out, err := svc.CreateCVRecommendation(context.Background(), "user-1", dto.CreateCVRecommendationRequest{
+		CVFile: makeFileHeader(t, "cv_file", "cv.pdf", []byte("%PDF-1.7 cv")),
+	})
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if out.Status != model.RecommendationStatusCompleted {
+		t.Fatalf("expected completed, got %s", out.Status)
+	}
+}
+
+func TestCreateCVRecommendationServiceRejectsMissingFile(t *testing.T) {
+	svc := service.NewRecommendationServiceWithDeps(&fakeRecommendationRepo{}, service.NewLocalDocumentStorage(t.TempDir(), ""), &fakeRecommendationAIClient{})
+
+	_, err := svc.CreateCVRecommendation(context.Background(), "user-1", dto.CreateCVRecommendationRequest{})
+	if err != errs.ErrInvalidInput {
+		t.Fatalf("expected %v, got %v", errs.ErrInvalidInput, err)
+	}
+}
+
+func TestCreateProfileRecommendationServiceRejectsWhenAIClientMissing(t *testing.T) {
+	svc := service.NewRecommendationServiceWithDeps(&fakeRecommendationRepo{}, service.NewLocalDocumentStorage(t.TempDir(), ""), nil)
+
+	_, err := svc.CreateProfileRecommendation(context.Background(), "user-1", dto.CreateProfileRecommendationRequest{
+		TranscriptFile: makeFileHeader(t, "transcript_file", "transcript.pdf", []byte("%PDF-1.7 transcript")),
+		CVFile:         makeFileHeader(t, "cv_file", "cv.pdf", []byte("%PDF-1.7 cv")),
+	})
+	if err != errs.ErrExternalService {
+		t.Fatalf("expected %v, got %v", errs.ErrExternalService, err)
 	}
 }
