@@ -19,5 +19,8 @@ func registerRecommendationRoutes(router *gin.Engine, recRepo repository.Recomme
 	recommendationGroup.Use(authMiddleware.RequireAuth())
 	recommendationGroup.POST("/documents", ctrl.UploadDocument)
 	recommendationGroup.POST("/submissions", ctrl.CreateSubmission)
+	recommendationGroup.POST("/profile", ctrl.CreateProfileRecommendation)
+	recommendationGroup.POST("/transcript", ctrl.CreateTranscriptRecommendation)
+	recommendationGroup.POST("/cv", ctrl.CreateCVRecommendation)
 	recommendationGroup.GET("/submissions/:id", ctrl.GetSubmissionDetail)
 }

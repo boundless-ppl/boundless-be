@@ -21,6 +21,9 @@ import (
 type RecommendationService interface {
 	UploadDocument(ctx context.Context, input service.UploadDocumentInput) (service.UploadDocumentOutput, error)
 	CreateSubmission(ctx context.Context, input service.CreateSubmissionInput) (service.CreateSubmissionOutput, error)
+	CreateProfileRecommendation(ctx context.Context, userID string, req dto.CreateProfileRecommendationRequest) (service.CreateRecommendationWorkflowOutput, error)
+	CreateTranscriptRecommendation(ctx context.Context, userID string, req dto.CreateTranscriptRecommendationRequest) (service.CreateRecommendationWorkflowOutput, error)
+	CreateCVRecommendation(ctx context.Context, userID string, req dto.CreateCVRecommendationRequest) (service.CreateRecommendationWorkflowOutput, error)
 	GetSubmissionDetail(ctx context.Context, userID, submissionID string) (repository.SubmissionDetail, error)
 }
 
@@ -121,6 +124,87 @@ func (c *RecommendationController) CreateSubmission(ctx *gin.Context) {
 	})
 }
 
+func (c *RecommendationController) CreateProfileRecommendation(ctx *gin.Context) {
+	userID, ok := ctx.Get(middleware.UserIDContextKey)
+	if !ok {
+		ctx.JSON(http.StatusUnauthorized, dto.ErrorResponse{Error: "authentication failed"})
+		return
+	}
+
+	var req dto.CreateProfileRecommendationRequest
+	if err := ctx.ShouldBind(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: "invalid input"})
+		return
+	}
+
+	output, err := c.recommendationService.CreateProfileRecommendation(ctx.Request.Context(), userID.(string), req)
+	if err != nil {
+		c.writeRecommendationWorkflowError(ctx, err)
+		return
+	}
+
+	ctx.JSON(http.StatusCreated, dto.CreateRecommendationWorkflowResponse{
+		SubmissionID: output.SubmissionID,
+		Status:       string(output.Status),
+		ResultSetID:  output.ResultSetID,
+		Result:       output.Result,
+	})
+}
+
+func (c *RecommendationController) CreateTranscriptRecommendation(ctx *gin.Context) {
+	userID, ok := ctx.Get(middleware.UserIDContextKey)
+	if !ok {
+		ctx.JSON(http.StatusUnauthorized, dto.ErrorResponse{Error: "authentication failed"})
+		return
+	}
+
+	var req dto.CreateTranscriptRecommendationRequest
+	if err := ctx.ShouldBind(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: "invalid input"})
+		return
+	}
+
+	output, err := c.recommendationService.CreateTranscriptRecommendation(ctx.Request.Context(), userID.(string), req)
+	if err != nil {
+		c.writeRecommendationWorkflowError(ctx, err)
+		return
+	}
+
+	ctx.JSON(http.StatusCreated, dto.CreateRecommendationWorkflowResponse{
+		SubmissionID: output.SubmissionID,
+		Status:       string(output.Status),
+		ResultSetID:  output.ResultSetID,
+		Result:       output.Result,
+	})
+}
+
+func (c *RecommendationController) CreateCVRecommendation(ctx *gin.Context) {
+	userID, ok := ctx.Get(middleware.UserIDContextKey)
+	if !ok {
+		ctx.JSON(http.StatusUnauthorized, dto.ErrorResponse{Error: "authentication failed"})
+		return
+	}
+
+	var req dto.CreateCVRecommendationRequest
+	if err := ctx.ShouldBind(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: "invalid input"})
+		return
+	}
+
+	output, err := c.recommendationService.CreateCVRecommendation(ctx.Request.Context(), userID.(string), req)
+	if err != nil {
+		c.writeRecommendationWorkflowError(ctx, err)
+		return
+	}
+
+	ctx.JSON(http.StatusCreated, dto.CreateRecommendationWorkflowResponse{
+		SubmissionID: output.SubmissionID,
+		Status:       string(output.Status),
+		ResultSetID:  output.ResultSetID,
+		Result:       output.Result,
+	})
+}
+
 func (c *RecommendationController) GetSubmissionDetail(ctx *gin.Context) {
 	userID, ok := ctx.Get(middleware.UserIDContextKey)
 	if !ok {
@@ -217,4 +301,17 @@ func (c *RecommendationController) GetSubmissionDetail(ctx *gin.Context) {
 	}
 
 	ctx.JSON(http.StatusOK, response)
+}
+
+func (c *RecommendationController) writeRecommendationWorkflowError(ctx *gin.Context, err error) {
+	switch {
+	case errors.Is(err, errs.ErrUnauthorized):
+		ctx.JSON(http.StatusUnauthorized, dto.ErrorResponse{Error: "authentication failed"})
+	case errors.Is(err, errs.ErrInvalidInput), errors.Is(err, errs.ErrNoDocumentProvided):
+		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: "invalid input"})
+	case errors.Is(err, errs.ErrExternalService):
+		ctx.JSON(http.StatusBadGateway, dto.ErrorResponse{Error: "external service error"})
+	default:
+		ctx.JSON(http.StatusInternalServerError, dto.ErrorResponse{Error: "internal server error"})
+	}
 }
