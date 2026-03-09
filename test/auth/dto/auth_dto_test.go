@@ -8,12 +8,12 @@ import (
 )
 
 func TestRegisterRequestJsonMappingDto(t *testing.T) {
-	payload := `{"nama_lengkap":"Alice Doe","role":"admin","email":"alice@example.com","password":"Secret123!"}`
+	payload := `{"nama_lengkap":"Alice Doe","email":"alice@example.com","password":"Secret123!"}`
 	var req dto.RegisterRequest
 	if err := json.Unmarshal([]byte(payload), &req); err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
-	if req.NamaLengkap != "Alice Doe" || req.Role != "admin" || req.Email != "alice@example.com" || req.Password != "Secret123!" {
+	if req.NamaLengkap != "Alice Doe" || req.Email != "alice@example.com" || req.Password != "Secret123!" {
 		t.Fatal("unexpected register request mapping")
 	}
 }

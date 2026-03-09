@@ -20,15 +20,14 @@ import (
 )
 
 type fakeAuthService struct {
-	registerTokens service.AuthTokens
 	registerErr    error
 	loginTokens    service.AuthTokens
 	loginErr       error
 	logoutErr      error
 }
 
-func (f *fakeAuthService) Register(ctx context.Context, fullName, role, email, password string) (service.AuthTokens, error) {
-	return f.registerTokens, f.registerErr
+func (f *fakeAuthService) Register(ctx context.Context, fullName, role, email, password string) error {
+	return f.registerErr
 }
 
 func (f *fakeAuthService) Login(ctx context.Context, email, password string) (service.AuthTokens, error) {
@@ -41,12 +40,12 @@ func (f *fakeAuthService) Logout(token string) error {
 
 func TestRegisterSuccessController(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	svc := &fakeAuthService{registerTokens: service.AuthTokens{AccessToken: "a", RefreshToken: "r"}}
+	svc := &fakeAuthService{}
 	c := controller.NewAuthController(svc)
 	router := gin.New()
 	router.POST("/auth/register", c.Register)
 
-	body, _ := json.Marshal(dto.RegisterRequest{NamaLengkap: "Alice Doe", Role: "admin", Email: "alice@example.com", Password: "Secret123!"})
+	body, _ := json.Marshal(dto.RegisterRequest{NamaLengkap: "Alice Doe", Email: "alice@example.com", Password: "Secret123!"})
 	req := httptest.NewRequest(http.MethodPost, "/auth/register", bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -81,7 +80,7 @@ func TestRegisterDuplicateEmailController(t *testing.T) {
 	router := gin.New()
 	router.POST("/auth/register", c.Register)
 
-	body, _ := json.Marshal(dto.RegisterRequest{NamaLengkap: "Alice Doe", Role: "admin", Email: "alice@example.com", Password: "Secret123!"})
+	body, _ := json.Marshal(dto.RegisterRequest{NamaLengkap: "Alice Doe", Email: "alice@example.com", Password: "Secret123!"})
 	req := httptest.NewRequest(http.MethodPost, "/auth/register", bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -105,11 +104,15 @@ func TestLoginSuccessController(t *testing.T) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("expected status %d, got %d", http.StatusSeeOther, rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
 	}
-	if rec.Header().Get("Location") != "/" {
-		t.Fatalf("expected redirect location /, got %s", rec.Header().Get("Location"))
+	var got dto.AuthResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if got.AccessToken == "" || got.RefreshToken == "" {
+		t.Fatal("expected non-empty tokens")
 	}
 }
 
