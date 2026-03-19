@@ -91,6 +91,7 @@ func (f *fakeRecRepo) FindSubmissionDetail(ctx context.Context, submissionID, us
 func setupHandler(t *testing.T, recRepo repository.RecommendationRepository) http.Handler {
 	t.Helper()
 	t.Setenv("AUTH_SECRET", "test-secret")
+	t.Setenv("CORS_ALLOWED_ORIGINS", "*")
 	t.Setenv("DOCUMENT_STORAGE_DIR", t.TempDir())
 	t.Setenv("DOCUMENT_PUBLIC_BASE_URL", "")
 
