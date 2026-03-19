@@ -11,10 +11,11 @@ import (
 
 func registerAuthRoutes(router *gin.Engine, userRepo repository.UserRepository) {
 	authService := service.NewAuthService(userRepo)
-	authController := controller.NewAuthController(authService)
+	authController := controller.NewAuthController(authService, userRepo)
 	authMiddleware := middleware.NewAuthMiddleware(authService)
 
 	router.POST("/auth/register", authController.Register)
 	router.POST("/auth/login", authController.Login)
 	router.POST("/auth/logout", authMiddleware.RequireAuth(), authController.Logout)
+	router.GET("/auth/me", authMiddleware.RequireAuth(), authController.Me)
 }

@@ -21,10 +21,11 @@ type AuthService interface {
 
 type AuthController struct {
 	authService AuthService
+	userRepo    repository.UserRepository
 }
 
-func NewAuthController(authService AuthService) *AuthController {
-	return &AuthController{authService: authService}
+func NewAuthController(authService AuthService, userRepo repository.UserRepository) *AuthController {
+	return &AuthController{authService: authService, userRepo: userRepo}
 }
 
 func (c *AuthController) Register(ctx *gin.Context) {
@@ -62,6 +63,13 @@ func (c *AuthController) Login(ctx *gin.Context) {
 
 	tokens, err := c.authService.Login(ctx.Request.Context(), req.Email, req.Password)
 	if err != nil {
+		if errors.Is(err, service.ErrAccountLocked) {
+			ctx.JSON(http.StatusTooManyRequests, dto.ErrorResponse{
+				Error: err.Error(),
+			})
+			return
+		}
+
 		ctx.JSON(http.StatusUnauthorized, dto.ErrorResponse{Error: "authentication failed"})
 		return
 	}
@@ -85,4 +93,25 @@ func (c *AuthController) Logout(ctx *gin.Context) {
 	}
 
 	ctx.Status(http.StatusNoContent)
+}
+
+func (c *AuthController) Me(ctx *gin.Context) {
+	userID, exists := ctx.Get(middleware.UserIDContextKey)
+	if !exists {
+		ctx.JSON(http.StatusUnauthorized, dto.ErrorResponse{Error: "authentication failed"})
+		return
+	}
+
+	user, err := c.userRepo.FindByID(ctx.Request.Context(), userID.(string))
+	if err != nil {
+		ctx.JSON(http.StatusUnauthorized, dto.ErrorResponse{Error: "authentication failed"})
+		return
+	}
+
+	ctx.JSON(http.StatusOK, dto.MeResponse{
+		UserID:      user.UserID,
+		NamaLengkap: user.NamaLengkap,
+		Email:       user.Email,
+		Role:        string(user.Role),
+	})
 }

@@ -23,3 +23,10 @@ type MessageResponse struct {
 type ErrorResponse struct {
 	Error string `json:"error"`
 }
+
+type MeResponse struct {
+	UserID      string `json:"user_id"`
+	NamaLengkap string `json:"nama_lengkap"`
+	Email       string `json:"email"`
+	Role        string `json:"role"`
+}
