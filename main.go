@@ -33,10 +33,12 @@ func main() {
 	userRepo := repository.NewUserRepository(db)
 	univRepo := repository.NewUniversityRepository(db)
 	recRepo := repository.NewRecommendationRepository(db)
+	dreamTrackerRepo := repository.NewDreamTrackerRepository(db)
 	handler := api.NewHandler(api.Dependencies{
-		UserRepo: userRepo,
-		UnivRepo: univRepo,
-		RecRepo:  recRepo,
+		UserRepo:         userRepo,
+		UnivRepo:         univRepo,
+		RecRepo:          recRepo,
+		DreamTrackerRepo: dreamTrackerRepo,
 	})
 
 	port := os.Getenv("PORT")
