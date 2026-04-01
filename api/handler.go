@@ -1,6 +1,7 @@
 package api
 
 import (
+	"boundless-be/middleware"
 	"boundless-be/repository"
 	"time"
 
@@ -18,6 +19,7 @@ type Dependencies struct {
 func NewHandler(dep Dependencies) *gin.Engine {
 	router := gin.New()
 	router.Use(gin.Recovery())
+	router.Use(middleware.SecurityHeaders())
 
 	router.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"http://localhost:3000"},
