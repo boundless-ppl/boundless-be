@@ -68,6 +68,10 @@ func (c *AuthController) Login(ctx *gin.Context) {
 
 	tokens, err := c.authService.Login(ctx.Request.Context(), req.Email, req.Password)
 	if err != nil {
+		if errors.Is(err, service.ErrAccountLocked) {
+			ctx.JSON(http.StatusTooManyRequests, dto.ErrorResponse{Error: "too many login attempts"})
+			return
+		}
 		ctx.JSON(http.StatusUnauthorized, dto.ErrorResponse{Error: authFailedMessage})
 		return
 	}
