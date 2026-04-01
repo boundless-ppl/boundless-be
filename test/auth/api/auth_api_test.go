@@ -20,6 +20,7 @@ import (
 
 func TestMain(m *testing.M) {
 	os.Setenv("AUTH_SECRET", "test-secret")
+	os.Setenv("CORS_ALLOWED_ORIGINS", "*")
 	os.Exit(m.Run())
 }
 

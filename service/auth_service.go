@@ -94,7 +94,8 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (AuthTo
 
 	now := time.Now()
 	if user.LockedUntil.After(now) {
-		return AuthTokens{}, ErrAccountLocked
+		remaining := time.Until(user.LockedUntil).Minutes()
+		return AuthTokens{}, fmt.Errorf("%w: %.0f minutes remaining", ErrAccountLocked, remaining)
 	}
 
 	if !checkPassword(user.PasswordHash, password) {

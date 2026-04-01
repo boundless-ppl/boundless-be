@@ -2,6 +2,8 @@ package api
 
 import (
 	"boundless-be/repository"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/gin-contrib/cors"
@@ -16,10 +18,11 @@ type Dependencies struct {
 
 func NewHandler(dep Dependencies) *gin.Engine {
 	router := gin.New()
+	origins := strings.Split(os.Getenv("CORS_ALLOWED_ORIGINS"), ",")
 	router.Use(gin.Recovery())
 
 	router.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"http://localhost:3000"},
+		AllowOrigins:     origins,
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
 		AllowCredentials: true,
