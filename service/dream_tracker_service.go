@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -159,7 +160,12 @@ func (s *DreamTrackerService) GetDreamTrackerDetail(ctx context.Context, userID,
 	if userID == "" || strings.TrimSpace(dreamTrackerID) == "" {
 		return repository.DreamTrackerDetail{}, errs.ErrInvalidInput
 	}
-	return s.repo.FindDreamTrackerDetail(ctx, dreamTrackerID, userID)
+	detail, err := s.repo.FindDreamTrackerDetail(ctx, dreamTrackerID, userID)
+	if err != nil {
+		return repository.DreamTrackerDetail{}, err
+	}
+	detail.Summary = buildDreamTrackerSummary(detail.Requirements, detail.Milestones, detail.ProgramInfo.AdmissionDeadline)
+	return detail, nil
 }
 
 func (s *DreamTrackerService) GetDocumentDetail(ctx context.Context, userID, documentID string) (model.Document, error) {
@@ -182,6 +188,9 @@ func (s *DreamTrackerService) SubmitDreamRequirement(ctx context.Context, input 
 	doc, err := s.repo.FindDocumentByIDAndUser(ctx, input.DocumentID, input.UserID)
 	if err != nil {
 		return SubmitDreamRequirementOutput{}, err
+	}
+	if !isPDFDocument(doc) {
+		return SubmitDreamRequirementOutput{}, errs.ErrInvalidInput
 	}
 
 	requirement.DocumentID = &doc.DocumentID
@@ -253,4 +262,55 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func buildDreamTrackerSummary(
+	requirements []model.DreamRequirementDetail,
+	milestones []model.DreamKeyMilestone,
+	admissionDeadline *time.Time,
+) model.DreamTrackerSummary {
+	summary := model.DreamTrackerSummary{
+		TotalRequirements: len(requirements),
+	}
+	for _, requirement := range requirements {
+		if requirement.Status == model.DreamRequirementStatusUploaded || requirement.Status == model.DreamRequirementStatusVerified {
+			summary.CompletedRequirements++
+		}
+	}
+	if summary.TotalRequirements > 0 {
+		summary.CompletionPercentage = (summary.CompletedRequirements * 100) / summary.TotalRequirements
+	}
+
+	now := time.Now().UTC()
+	var nextDeadline *time.Time
+	for _, milestone := range milestones {
+		if milestone.DeadlineDate == nil {
+			continue
+		}
+		if milestone.DeadlineDate.Before(now) {
+			continue
+		}
+		if nextDeadline == nil || milestone.DeadlineDate.Before(*nextDeadline) {
+			nextDeadline = milestone.DeadlineDate
+		}
+	}
+	if nextDeadline == nil {
+		nextDeadline = admissionDeadline
+	}
+	summary.NextDeadlineAt = nextDeadline
+	if nextDeadline != nil {
+		summary.IsOverdue = nextDeadline.Before(now)
+		summary.IsDeadlineNear = !summary.IsOverdue && nextDeadline.Sub(now) <= 7*24*time.Hour
+	}
+	if !summary.IsOverdue && admissionDeadline != nil && admissionDeadline.Before(now) {
+		summary.IsOverdue = true
+	}
+	return summary
+}
+
+func isPDFDocument(doc model.Document) bool {
+	if strings.EqualFold(strings.TrimSpace(doc.MIMEType), "application/pdf") {
+		return true
+	}
+	return strings.EqualFold(filepath.Ext(strings.TrimSpace(doc.OriginalFilename)), ".pdf")
 }

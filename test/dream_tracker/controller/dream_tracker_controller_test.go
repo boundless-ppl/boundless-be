@@ -173,13 +173,24 @@ func TestGetDreamTrackerSuccessController(t *testing.T) {
 				UpdatedAt:      now,
 				SourceType:     "MANUAL",
 			},
-			Requirements: []model.DreamRequirementStatus{
+			Summary: model.DreamTrackerSummary{
+				CompletionPercentage:  100,
+				CompletedRequirements: 1,
+				TotalRequirements:     1,
+			},
+			ProgramInfo: model.DreamTrackerProgramInfo{
+				ProgramID: "program-1",
+			},
+			Requirements: []model.DreamRequirementDetail{
 				{
-					DreamReqStatusID: "req-status-1",
-					ReqCatalogID:     "req-1",
-					Status:           model.DreamRequirementStatusUploaded,
-					AIMessages:       &rawMessages,
-					CreatedAt:        now,
+					DreamRequirementStatus: model.DreamRequirementStatus{
+						DreamReqStatusID: "req-status-1",
+						ReqCatalogID:     "req-1",
+						Status:           model.DreamRequirementStatusUploaded,
+						AIMessages:       &rawMessages,
+						CreatedAt:        now,
+					},
+					RequirementLabel: "Transcript",
 				},
 			},
 		},
@@ -191,6 +202,24 @@ func TestGetDreamTrackerSuccessController(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected %d got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+
+	var payload struct {
+		Summary struct {
+			CompletionPercentage int `json:"completion_percentage"`
+		} `json:"summary"`
+		Requirements []struct {
+			RequirementLabel string `json:"requirement_label"`
+		} `json:"requirements"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("invalid json: %v", err)
+	}
+	if payload.Summary.CompletionPercentage != 100 {
+		t.Fatalf("unexpected summary: %+v", payload.Summary)
+	}
+	if len(payload.Requirements) != 1 || payload.Requirements[0].RequirementLabel != "Transcript" {
+		t.Fatalf("unexpected requirements payload: %+v", payload.Requirements)
 	}
 }
 

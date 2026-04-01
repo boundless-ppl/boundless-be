@@ -12,6 +12,7 @@ import (
 
 	"boundless-be/api"
 	"boundless-be/database"
+	"boundless-be/debug"
 	"boundless-be/repository"
 
 	"github.com/joho/godotenv"
@@ -21,6 +22,8 @@ func main() {
 	if err := godotenv.Overload(".env"); err != nil && !os.IsNotExist(err) {
 		log.Fatalf("failed to load .env: %v", err)
 	}
+
+	debug.StartPprofServer(os.Getenv("PPROF_ADDR"))
 
 	databaseURL := os.Getenv("DATABASE_URL")
 	db, err := database.NewConnection(databaseURL)

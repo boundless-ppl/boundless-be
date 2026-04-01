@@ -108,6 +108,9 @@ func TestGetDreamTrackerDetailService(t *testing.T) {
 				UpdatedAt:      now,
 				SourceType:     "MANUAL",
 			},
+			ProgramInfo: model.DreamTrackerProgramInfo{
+				ProgramID: "program-1",
+			},
 		},
 	}
 	svc := service.NewDreamTrackerServiceWithDeps(repo, nil)
@@ -118,6 +121,9 @@ func TestGetDreamTrackerDetailService(t *testing.T) {
 	}
 	if detail.DreamTracker.DreamTrackerID != "tracker-1" {
 		t.Fatalf("expected tracker-1 got %s", detail.DreamTracker.DreamTrackerID)
+	}
+	if detail.ProgramInfo.ProgramID != "program-1" {
+		t.Fatalf("unexpected program info: %+v", detail.ProgramInfo)
 	}
 }
 
@@ -218,7 +224,7 @@ func TestSubmitDreamRequirementWithoutAIClientService(t *testing.T) {
 			ReqCatalogID:     "req-1",
 			Status:           model.DreamRequirementStatusNotUploaded,
 		},
-		document: model.Document{DocumentID: "doc-1", UserID: "user-1"},
+		document: model.Document{DocumentID: "doc-1", UserID: "user-1", MIMEType: "application/pdf"},
 	}
 	svc := service.NewDreamTrackerServiceWithDeps(repo, nil)
 
@@ -243,7 +249,7 @@ func TestSubmitDreamRequirementAIErrorService(t *testing.T) {
 			ReqCatalogID:     "req-1",
 			Status:           model.DreamRequirementStatusNotUploaded,
 		},
-		document: model.Document{DocumentID: "doc-1", UserID: "user-1"},
+		document: model.Document{DocumentID: "doc-1", UserID: "user-1", MIMEType: "application/pdf"},
 	}
 	aiClient := &fakeDreamTrackerAIClient{reviewErr: errors.New("ai failed")}
 	svc := service.NewDreamTrackerServiceWithDeps(repo, aiClient)
@@ -258,6 +264,33 @@ func TestSubmitDreamRequirementAIErrorService(t *testing.T) {
 	}
 	if output.Requirement.AIStatus == nil || *output.Requirement.AIStatus != "FAILED" {
 		t.Fatalf("expected failed ai status got %+v", output.Requirement.AIStatus)
+	}
+}
+
+func TestSubmitDreamRequirementRejectsNonPDFService(t *testing.T) {
+	repo := &fakeDreamTrackerRepo{
+		requirement: model.DreamRequirementStatus{
+			DreamReqStatusID: "req-status-1",
+			DreamTrackerID:   "tracker-1",
+			ReqCatalogID:     "req-1",
+			Status:           model.DreamRequirementStatusNotUploaded,
+		},
+		document: model.Document{
+			DocumentID:       "doc-1",
+			UserID:           "user-1",
+			OriginalFilename: "image.png",
+			MIMEType:         "image/png",
+		},
+	}
+	svc := service.NewDreamTrackerServiceWithDeps(repo, nil)
+
+	_, err := svc.SubmitDreamRequirement(context.Background(), service.SubmitDreamRequirementInput{
+		UserID:           "user-1",
+		DreamReqStatusID: "req-status-1",
+		DocumentID:       "doc-1",
+	})
+	if err != errs.ErrInvalidInput {
+		t.Fatalf("expected %v, got %v", errs.ErrInvalidInput, err)
 	}
 }
 
@@ -285,7 +318,7 @@ func TestFirstNonEmptyViaAISelectionService(t *testing.T) {
 			ReqCatalogID:     "req-1",
 			Status:           model.DreamRequirementStatusNotUploaded,
 		},
-		document: model.Document{DocumentID: "doc-1", UserID: "user-1", DokumenURL: "", PublicURL: "https://example.com/public.pdf"},
+		document: model.Document{DocumentID: "doc-1", UserID: "user-1", MIMEType: "application/pdf", DokumenURL: "", PublicURL: "https://example.com/public.pdf"},
 	}
 	aiClient := &fakeDreamTrackerAIClient{
 		reviewResponse: dto.DreamRequirementReviewResponse{

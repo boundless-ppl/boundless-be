@@ -1,4 +1,4 @@
-package database
+package database_test
 
 import (
 	"context"
@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"io"
 	"testing"
+
+	"boundless-be/database"
 )
 
 func TestNewConnectionRequiresDatabaseURL(t *testing.T) {
-	db, err := NewConnection("")
-	if err != ErrMissingDatabaseURL {
-		t.Fatalf("expected %v, got %v", ErrMissingDatabaseURL, err)
+	db, err := database.NewConnection("")
+	if err != database.ErrMissingDatabaseURL {
+		t.Fatalf("expected %v, got %v", database.ErrMissingDatabaseURL, err)
 	}
 	if db != nil {
 		t.Fatal("expected nil db")
@@ -39,13 +41,9 @@ func TestNewConnectionSuccessfulPing(t *testing.T) {
 	driverName := fmt.Sprintf("fakeping_%d", fakePingSeq)
 	sql.Register(driverName, &fakePingDriver{})
 
-	origOpen := databaseOpen
-	databaseOpen = func(driverNameArg, dsn string) (*sql.DB, error) {
+	db, err := database.NewConnectionWithOpen("fake-dsn", func(driverNameArg, dsn string) (*sql.DB, error) {
 		return sql.Open(driverName, dsn)
-	}
-	defer func() { databaseOpen = origOpen }()
-
-	db, err := NewConnection("fake-dsn")
+	})
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}

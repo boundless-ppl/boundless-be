@@ -45,3 +45,50 @@ type DreamRequirementStatus struct {
 	AIMessages       *string
 	CreatedAt        time.Time
 }
+
+type DreamTrackerSummary struct {
+	CompletionPercentage  int
+	CompletedRequirements int
+	TotalRequirements     int
+	NextDeadlineAt        *time.Time
+	IsDeadlineNear        bool
+	IsOverdue             bool
+}
+
+type DreamTrackerProgramInfo struct {
+	ProgramID         string
+	ProgramName       *string
+	UniversityName    *string
+	AdmissionName     *string
+	Intake            *string
+	AdmissionURL      *string
+	AdmissionDeadline *time.Time
+}
+
+type DreamRequirementDetail struct {
+	DreamRequirementStatus
+	RequirementKey         string
+	RequirementLabel       string
+	RequirementCategory    string
+	RequirementDescription *string
+	ActionLabel            string
+	CanUpload              bool
+	NeedsReupload          bool
+}
+
+type DreamTrackerFundingStatus string
+
+const (
+	DreamTrackerFundingStatusAvailable DreamTrackerFundingStatus = "AVAILABLE"
+	DreamTrackerFundingStatusSelected  DreamTrackerFundingStatus = "SELECTED"
+)
+
+type DreamTrackerFundingOption struct {
+	FundingID      string
+	NamaBeasiswa   string
+	Deskripsi      *string
+	Provider       string
+	TipePembiayaan FundingType
+	Website        string
+	Status         DreamTrackerFundingStatus
+}

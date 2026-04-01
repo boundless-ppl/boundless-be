@@ -40,13 +40,16 @@ type fakeDreamAPIRepo struct {
 func (f *fakeDreamAPIRepo) CreateDreamTracker(ctx context.Context, tracker model.DreamTracker) (model.DreamTracker, error) {
 	f.tracker.DreamTracker = tracker
 	if tracker.FundingID != nil {
-		f.tracker.Requirements = []model.DreamRequirementStatus{
+		f.tracker.Requirements = []model.DreamRequirementDetail{
 			{
-				DreamReqStatusID: "req-status-1",
-				DreamTrackerID:   tracker.DreamTrackerID,
-				ReqCatalogID:     "req-1",
-				Status:           model.DreamRequirementStatusNotUploaded,
-				CreatedAt:        tracker.CreatedAt,
+				DreamRequirementStatus: model.DreamRequirementStatus{
+					DreamReqStatusID: "req-status-1",
+					DreamTrackerID:   tracker.DreamTrackerID,
+					ReqCatalogID:     "req-1",
+					Status:           model.DreamRequirementStatusNotUploaded,
+					CreatedAt:        tracker.CreatedAt,
+				},
+				RequirementLabel: "Transcript",
 			},
 		}
 	}
@@ -141,14 +144,21 @@ func TestCreateAndGetDreamTrackerAPI(t *testing.T) {
 
 	var getResp struct {
 		DreamTrackerID string `json:"dream_tracker_id"`
-		Requirements   []struct {
-			Status string `json:"status"`
+		Summary        struct {
+			TotalRequirements int `json:"total_requirements"`
+		} `json:"summary"`
+		Requirements []struct {
+			Status           string `json:"status"`
+			RequirementLabel string `json:"requirement_label"`
 		} `json:"requirements"`
 	}
 	if err := json.Unmarshal(getRec.Body.Bytes(), &getResp); err != nil {
 		t.Fatalf("invalid get response: %v", err)
 	}
-	if len(getResp.Requirements) != 1 || getResp.Requirements[0].Status != "NOT_UPLOADED" {
+	if getResp.Summary.TotalRequirements != 1 {
+		t.Fatalf("unexpected summary payload: %+v", getResp.Summary)
+	}
+	if len(getResp.Requirements) != 1 || getResp.Requirements[0].Status != "NOT_UPLOADED" || getResp.Requirements[0].RequirementLabel != "Transcript" {
 		t.Fatalf("unexpected requirements payload: %+v", getResp.Requirements)
 	}
 }
@@ -218,5 +228,47 @@ func TestSubmitDreamRequirementAPI(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected %d got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+}
+
+func TestSubmitDreamRequirementRejectsNonPDFAPI(t *testing.T) {
+	docID := "9f0fdb35-6c31-4d48-a804-a89f6c29e3ef"
+	reqID := "d669bc06-d6e2-4592-a1a3-e6c64d846b97"
+	repo := &fakeDreamAPIRepo{
+		tracker: repository.DreamTrackerDetail{
+			DreamTracker: model.DreamTracker{
+				DreamTrackerID: "tracker-1",
+				UserID:         "user-1",
+			},
+		},
+		docs: map[string]model.Document{
+			docID: {
+				DocumentID:       docID,
+				UserID:           "user-1",
+				OriginalFilename: "doc.png",
+				MIMEType:         "image/png",
+				UploadedAt:       time.Now().UTC(),
+			},
+		},
+		reqs: map[string]model.DreamRequirementStatus{
+			reqID: {
+				DreamReqStatusID: reqID,
+				DreamTrackerID:   "tracker-1",
+				ReqCatalogID:     "req-1",
+				Status:           model.DreamRequirementStatusNotUploaded,
+			},
+		},
+	}
+	handler := setupDreamAPIHandler(t, repo)
+	token := issueDreamToken(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/dream-trackers/requirements/"+reqID+"/submit", bytes.NewBufferString(`{"document_id":"`+docID+`"}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected %d got %d body=%s", http.StatusBadRequest, rec.Code, rec.Body.String())
 	}
 }

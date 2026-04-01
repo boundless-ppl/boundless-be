@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"boundless-be/errs"
 	"boundless-be/model"
@@ -14,7 +15,11 @@ import (
 
 type DreamTrackerDetail struct {
 	DreamTracker model.DreamTracker
-	Requirements []model.DreamRequirementStatus
+	Summary      model.DreamTrackerSummary
+	ProgramInfo  model.DreamTrackerProgramInfo
+	Requirements []model.DreamRequirementDetail
+	Milestones   []model.DreamKeyMilestone
+	Fundings     []model.DreamTrackerFundingOption
 }
 
 type DreamTrackerRepository interface {
@@ -82,12 +87,27 @@ func (r *DBDreamTrackerRepository) FindDreamTrackerDetail(ctx context.Context, d
 	if err != nil {
 		return DreamTrackerDetail{}, err
 	}
-	requirements, err := r.findDreamRequirementStatuses(ctx, dreamTrackerID)
+	requirements, err := r.findDreamRequirementDetails(ctx, dreamTrackerID)
+	if err != nil {
+		return DreamTrackerDetail{}, err
+	}
+	programInfo, err := r.findDreamTrackerProgramInfo(ctx, tracker)
+	if err != nil {
+		return DreamTrackerDetail{}, err
+	}
+	milestones, err := r.findDreamKeyMilestones(ctx, dreamTrackerID)
+	if err != nil {
+		return DreamTrackerDetail{}, err
+	}
+	fundings, err := r.findDreamTrackerFundings(ctx, tracker)
 	if err != nil {
 		return DreamTrackerDetail{}, err
 	}
 	detail.DreamTracker = tracker
+	detail.ProgramInfo = programInfo
 	detail.Requirements = requirements
+	detail.Milestones = milestones
+	detail.Fundings = fundings
 	return detail, nil
 }
 
@@ -349,62 +369,265 @@ func (r *DBDreamTrackerRepository) findDreamTracker(ctx context.Context, dreamTr
 	return tracker, nil
 }
 
-func (r *DBDreamTrackerRepository) findDreamRequirementStatuses(ctx context.Context, dreamTrackerID string) ([]model.DreamRequirementStatus, error) {
+func (r *DBDreamTrackerRepository) findDreamRequirementDetails(ctx context.Context, dreamTrackerID string) ([]model.DreamRequirementDetail, error) {
 	reqQuery := `
-		SELECT dream_req_status_id, dream_tracker_id, document_id, req_catalog_id, status, notes, ai_status, ai_messages, created_at
-		FROM dream_requirement_status
+		SELECT drs.dream_req_status_id, drs.dream_tracker_id, drs.document_id, drs.req_catalog_id, drs.status, drs.notes, drs.ai_status, drs.ai_messages, drs.created_at,
+		       rc.key, rc.label, rc.kategori, rc.deskripsi
+		FROM dream_requirement_status drs
+		INNER JOIN requirement_catalog rc ON rc.req_catalog_id = drs.req_catalog_id
 		WHERE dream_tracker_id = $1
-		ORDER BY created_at ASC, dream_req_status_id ASC
+		ORDER BY drs.created_at ASC, drs.dream_req_status_id ASC
 	`
 	rows, err := r.db.QueryContext(ctx, reqQuery, dreamTrackerID)
 	if err != nil {
-		return nil, fmt.Errorf("find dream requirement statuses: %w", err)
+		return nil, fmt.Errorf("find dream requirement details: %w", err)
 	}
 	defer rows.Close()
 
-	items := make([]model.DreamRequirementStatus, 0)
+	items := make([]model.DreamRequirementDetail, 0)
 	for rows.Next() {
-		item, err := scanDreamRequirementStatus(rows)
+		item, err := scanDreamRequirementDetail(rows)
 		if err != nil {
 			return nil, err
 		}
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate dream requirement statuses: %w", err)
+		return nil, fmt.Errorf("iterate dream requirement details: %w", err)
 	}
 	return items, nil
 }
 
-func scanDreamRequirementStatus(scanner interface {
+func scanDreamRequirementDetail(scanner interface {
 	Scan(dest ...any) error
-}) (model.DreamRequirementStatus, error) {
-	var item model.DreamRequirementStatus
+}) (model.DreamRequirementDetail, error) {
+	var item model.DreamRequirementDetail
 	var documentID sql.NullString
 	var notes sql.NullString
 	var aiStatus sql.NullString
 	var aiMessages sql.NullString
+	var requirementDescription sql.NullString
 
 	if err := scanner.Scan(
-		&item.DreamReqStatusID,
-		&item.DreamTrackerID,
+		&item.DreamRequirementStatus.DreamReqStatusID,
+		&item.DreamRequirementStatus.DreamTrackerID,
 		&documentID,
-		&item.ReqCatalogID,
-		&item.Status,
+		&item.DreamRequirementStatus.ReqCatalogID,
+		&item.DreamRequirementStatus.Status,
 		&notes,
 		&aiStatus,
 		&aiMessages,
-		&item.CreatedAt,
+		&item.DreamRequirementStatus.CreatedAt,
+		&item.RequirementKey,
+		&item.RequirementLabel,
+		&item.RequirementCategory,
+		&requirementDescription,
 	); err != nil {
-		return model.DreamRequirementStatus{}, fmt.Errorf("scan dream requirement status: %w", err)
+		return model.DreamRequirementDetail{}, fmt.Errorf("scan dream requirement detail: %w", err)
 	}
 
-	assignNullString(&item.DocumentID, documentID)
-	assignNullString(&item.Notes, notes)
-	assignNullString(&item.AIStatus, aiStatus)
-	assignNullString(&item.AIMessages, aiMessages)
+	assignNullString(&item.DreamRequirementStatus.DocumentID, documentID)
+	assignNullString(&item.DreamRequirementStatus.Notes, notes)
+	assignNullString(&item.DreamRequirementStatus.AIStatus, aiStatus)
+	assignNullString(&item.DreamRequirementStatus.AIMessages, aiMessages)
+	assignNullString(&item.RequirementDescription, requirementDescription)
+	item.ActionLabel, item.CanUpload, item.NeedsReupload = buildRequirementAction(item.DreamRequirementStatus.Status)
 
 	return item, nil
+}
+
+func (r *DBDreamTrackerRepository) findDreamTrackerProgramInfo(ctx context.Context, tracker model.DreamTracker) (model.DreamTrackerProgramInfo, error) {
+	info := model.DreamTrackerProgramInfo{ProgramID: tracker.ProgramID}
+
+	query := `
+		SELECT ap.nama, ap.intake, ap.deadline, ap.website_url, rr.program_name, rr.university_name
+		FROM dream_tracker dt
+		LEFT JOIN admission_paths ap ON ap.admission_id = dt.admission_id
+		LEFT JOIN recommendation_results rr ON rr.rec_result_id = dt.source_rec_result_id
+		WHERE dt.dream_tracker_id = $1
+	`
+
+	var admissionName sql.NullString
+	var intake sql.NullString
+	var admissionDeadline sql.NullTime
+	var admissionURL sql.NullString
+	var programName sql.NullString
+	var universityName sql.NullString
+
+	err := r.db.QueryRowContext(ctx, query, tracker.DreamTrackerID).Scan(
+		&admissionName,
+		&intake,
+		&admissionDeadline,
+		&admissionURL,
+		&programName,
+		&universityName,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return info, nil
+		}
+		return model.DreamTrackerProgramInfo{}, fmt.Errorf("find dream tracker program info: %w", err)
+	}
+
+	assignNullString(&info.AdmissionName, admissionName)
+	assignNullString(&info.Intake, intake)
+	assignNullTime(&info.AdmissionDeadline, admissionDeadline)
+	assignNullString(&info.AdmissionURL, admissionURL)
+	assignNullString(&info.ProgramName, programName)
+	assignNullString(&info.UniversityName, universityName)
+	return info, nil
+}
+
+func (r *DBDreamTrackerRepository) findDreamKeyMilestones(ctx context.Context, dreamTrackerID string) ([]model.DreamKeyMilestone, error) {
+	query := `
+		SELECT dream_milestone_id, dream_tracker_id, title, description, deadline_date, is_required, status, created_at, updated_at
+		FROM dream_key_milestones
+		WHERE dream_tracker_id = $1
+		ORDER BY deadline_date ASC NULLS LAST, created_at ASC
+	`
+	rows, err := r.db.QueryContext(ctx, query, dreamTrackerID)
+	if err != nil {
+		return nil, fmt.Errorf("find dream key milestones: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]model.DreamKeyMilestone, 0)
+	for rows.Next() {
+		var item model.DreamKeyMilestone
+		var description sql.NullString
+		var deadlineDate sql.NullTime
+		if err := rows.Scan(
+			&item.DreamMilestoneID,
+			&item.DreamTrackerID,
+			&item.Title,
+			&description,
+			&deadlineDate,
+			&item.IsRequired,
+			&item.Status,
+			&item.CreatedAt,
+			&item.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan dream key milestone: %w", err)
+		}
+		assignNullString(&item.Description, description)
+		assignNullTime(&item.DeadlineDate, deadlineDate)
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate dream key milestones: %w", err)
+	}
+	return items, nil
+}
+
+func (r *DBDreamTrackerRepository) findDreamTrackerFundings(ctx context.Context, tracker model.DreamTracker) ([]model.DreamTrackerFundingOption, error) {
+	if tracker.AdmissionID == nil && tracker.FundingID == nil {
+		return []model.DreamTrackerFundingOption{}, nil
+	}
+
+	if tracker.AdmissionID == nil && tracker.FundingID != nil {
+		selectedFunding, err := r.findFundingByID(ctx, *tracker.FundingID)
+		if err != nil {
+			return nil, err
+		}
+		selectedFunding.Status = model.DreamTrackerFundingStatusSelected
+		return []model.DreamTrackerFundingOption{selectedFunding}, nil
+	}
+
+	query := `
+		SELECT fo.funding_id, fo.nama_beasiswa, fo.deskripsi, fo.provider, fo.tipe_pembiayaan, fo.website
+		FROM admission_funding af
+		INNER JOIN funding_options fo ON fo.funding_id = af.funding_id
+		WHERE af.admission_id = $1
+		ORDER BY fo.nama_beasiswa ASC
+	`
+	rows, err := r.db.QueryContext(ctx, query, *tracker.AdmissionID)
+	if err != nil {
+		return nil, fmt.Errorf("find dream tracker fundings: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]model.DreamTrackerFundingOption, 0)
+	for rows.Next() {
+		item, err := scanDreamTrackerFunding(rows)
+		if err != nil {
+			return nil, err
+		}
+		if tracker.FundingID != nil && item.FundingID == *tracker.FundingID {
+			item.Status = model.DreamTrackerFundingStatusSelected
+		} else {
+			item.Status = model.DreamTrackerFundingStatusAvailable
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate dream tracker fundings: %w", err)
+	}
+	if len(items) == 0 && tracker.FundingID != nil {
+		selectedFunding, err := r.findFundingByID(ctx, *tracker.FundingID)
+		if err != nil {
+			return nil, err
+		}
+		selectedFunding.Status = model.DreamTrackerFundingStatusSelected
+		items = append(items, selectedFunding)
+	}
+	return items, nil
+}
+
+func (r *DBDreamTrackerRepository) findFundingByID(ctx context.Context, fundingID string) (model.DreamTrackerFundingOption, error) {
+	query := `
+		SELECT funding_id, nama_beasiswa, deskripsi, provider, tipe_pembiayaan, website
+		FROM funding_options
+		WHERE funding_id = $1
+	`
+	row, err := r.db.QueryContext(ctx, query, fundingID)
+	if err != nil {
+		return model.DreamTrackerFundingOption{}, fmt.Errorf("find funding by id: %w", err)
+	}
+	defer row.Close()
+	if !row.Next() {
+		if err := row.Err(); err != nil {
+			return model.DreamTrackerFundingOption{}, fmt.Errorf("find funding by id: %w", err)
+		}
+		return model.DreamTrackerFundingOption{}, nil
+	}
+	return scanDreamTrackerFunding(row)
+}
+
+func scanDreamTrackerFunding(scanner interface {
+	Scan(dest ...any) error
+}) (model.DreamTrackerFundingOption, error) {
+	var item model.DreamTrackerFundingOption
+	var description sql.NullString
+	if err := scanner.Scan(
+		&item.FundingID,
+		&item.NamaBeasiswa,
+		&description,
+		&item.Provider,
+		&item.TipePembiayaan,
+		&item.Website,
+	); err != nil {
+		return model.DreamTrackerFundingOption{}, fmt.Errorf("scan dream tracker funding: %w", err)
+	}
+	assignNullString(&item.Deskripsi, description)
+	return item, nil
+}
+
+func assignNullTime(target **time.Time, value sql.NullTime) {
+	if value.Valid {
+		timeValue := value.Time
+		*target = &timeValue
+	}
+}
+
+func buildRequirementAction(status model.DreamRequirementStatusValue) (string, bool, bool) {
+	switch status {
+	case model.DreamRequirementStatusRejected:
+		return "Upload Ulang", true, true
+	case model.DreamRequirementStatusNotUploaded:
+		return "Upload", true, false
+	default:
+		return "", false, false
+	}
 }
 
 func assignNullString(target **string, value sql.NullString) {

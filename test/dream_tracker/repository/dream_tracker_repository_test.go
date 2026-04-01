@@ -176,6 +176,13 @@ func TestFindDreamTrackerDetailRepository(t *testing.T) {
 	db := newFakeDreamDB(t, &fakeDreamDBBehavior{
 		queryFn: func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			switch {
+			case strings.Contains(query, "LEFT JOIN admission_paths ap"):
+				return &fakeDreamRows{
+					columns: []string{"nama", "intake", "deadline", "website_url", "program_name", "university_name"},
+					rows: [][]driver.Value{{
+						"Regular Admission", "Fall 2026", now, "https://example.com/admission", "Computer Science", "University of Bristol",
+					}},
+				}, nil
 			case strings.Contains(query, "FROM dream_tracker"):
 				return &fakeDreamRows{
 					columns: []string{"dream_tracker_id", "user_id", "program_id", "admission_id", "funding_id", "title", "status", "created_at", "updated_at", "source_type", "req_submission_id", "source_rec_result_id"},
@@ -183,11 +190,25 @@ func TestFindDreamTrackerDetailRepository(t *testing.T) {
 						"tracker-1", "user-1", "program-1", "admission-1", "funding-1", "Plan A", string(model.DreamTrackerStatusActive), now, now, "MANUAL", "submission-1", "result-1",
 					}},
 				}, nil
-			case strings.Contains(query, "FROM dream_requirement_status"):
+			case strings.Contains(query, "FROM dream_requirement_status drs"):
 				return &fakeDreamRows{
-					columns: []string{"dream_req_status_id", "dream_tracker_id", "document_id", "req_catalog_id", "status", "notes", "ai_status", "ai_messages", "created_at"},
+					columns: []string{"dream_req_status_id", "dream_tracker_id", "document_id", "req_catalog_id", "status", "notes", "ai_status", "ai_messages", "created_at", "key", "label", "kategori", "deskripsi"},
 					rows: [][]driver.Value{{
-						"req-status-1", "tracker-1", "doc-1", "req-1", string(model.DreamRequirementStatusUploaded), "looks good", "COMPLETED", "[\"ok\"]", now,
+						"req-status-1", "tracker-1", "doc-1", "req-1", string(model.DreamRequirementStatusUploaded), "looks good", "COMPLETED", "[\"ok\"]", now, "transcript", "Transcript", "DOCUMENT", "Academic transcript",
+					}},
+				}, nil
+			case strings.Contains(query, "FROM dream_key_milestones"):
+				return &fakeDreamRows{
+					columns: []string{"dream_milestone_id", "dream_tracker_id", "title", "description", "deadline_date", "is_required", "status", "created_at", "updated_at"},
+					rows: [][]driver.Value{{
+						"milestone-1", "tracker-1", "Registrasi Dibuka", "Application opens", now.Add(24 * time.Hour), true, string(model.DreamKeyMilestoneStatusNotStarted), now, now,
+					}},
+				}, nil
+			case strings.Contains(query, "FROM admission_funding"):
+				return &fakeDreamRows{
+					columns: []string{"funding_id", "nama_beasiswa", "deskripsi", "provider", "tipe_pembiayaan", "website"},
+					rows: [][]driver.Value{{
+						"funding-1", "LPDP", "Scholarship", "LPDP", string(model.FundingTypeScholarship), "https://lpdp.go.id",
 					}},
 				}, nil
 			default:
@@ -206,6 +227,15 @@ func TestFindDreamTrackerDetailRepository(t *testing.T) {
 	}
 	if len(detail.Requirements) != 1 || detail.Requirements[0].DocumentID == nil || *detail.Requirements[0].DocumentID != "doc-1" {
 		t.Fatalf("unexpected requirements: %+v", detail.Requirements)
+	}
+	if detail.Requirements[0].RequirementLabel != "Transcript" {
+		t.Fatalf("unexpected requirement detail: %+v", detail.Requirements[0])
+	}
+	if len(detail.Milestones) != 1 || detail.Milestones[0].Title != "Registrasi Dibuka" {
+		t.Fatalf("unexpected milestones: %+v", detail.Milestones)
+	}
+	if len(detail.Fundings) != 1 || detail.Fundings[0].Status != model.DreamTrackerFundingStatusSelected {
+		t.Fatalf("unexpected fundings: %+v", detail.Fundings)
 	}
 }
 

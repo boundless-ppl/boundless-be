@@ -105,7 +105,11 @@ func (c *DreamTrackerController) GetDreamTrackerDetail(ctx *gin.Context) {
 		SourceType:        detail.DreamTracker.SourceType,
 		ReqSubmissionID:   detail.DreamTracker.ReqSubmissionID,
 		SourceRecResultID: detail.DreamTracker.SourceRecResultID,
+		Summary:           toDreamTrackerSummaryResponse(detail.Summary),
+		Program:           toDreamTrackerProgramInfoResponse(detail.ProgramInfo),
 		Requirements:      toDreamRequirementStatusResponses(detail.Requirements),
+		Milestones:        toDreamTrackerMilestoneResponses(detail.Milestones),
+		Fundings:          toDreamTrackerFundingResponses(detail.Fundings),
 	})
 }
 
@@ -240,21 +244,99 @@ func (c *DreamTrackerController) writeSubmitDreamRequirementError(ctx *gin.Conte
 	}
 }
 
-func toDreamRequirementStatusResponses(items []model.DreamRequirementStatus) []dto.DreamRequirementStatusResponse {
+func toDreamRequirementStatusResponses(items []model.DreamRequirementDetail) []dto.DreamRequirementStatusResponse {
 	requirements := make([]dto.DreamRequirementStatusResponse, 0, len(items))
 	for _, item := range items {
 		requirements = append(requirements, dto.DreamRequirementStatusResponse{
 			DreamReqStatusID: item.DreamReqStatusID,
 			DocumentID:       item.DocumentID,
 			ReqCatalogID:     item.ReqCatalogID,
+			RequirementKey:   item.RequirementKey,
+			RequirementLabel: item.RequirementLabel,
+			Category:         item.RequirementCategory,
+			Description:      item.RequirementDescription,
 			Status:           string(item.Status),
 			Notes:            item.Notes,
 			AIStatus:         item.AIStatus,
 			AIMessages:       decodeAIMessages(item.AIMessages),
+			ActionLabel:      item.ActionLabel,
+			CanUpload:        item.CanUpload,
+			NeedsReupload:    item.NeedsReupload,
 			CreatedAt:        item.CreatedAt.UTC().Format(time.RFC3339),
 		})
 	}
 	return requirements
+}
+
+func toDreamTrackerSummaryResponse(summary model.DreamTrackerSummary) dto.DreamTrackerSummaryResponse {
+	var nextDeadlineAt *string
+	if summary.NextDeadlineAt != nil {
+		value := summary.NextDeadlineAt.UTC().Format(time.RFC3339)
+		nextDeadlineAt = &value
+	}
+	return dto.DreamTrackerSummaryResponse{
+		CompletionPercentage:  summary.CompletionPercentage,
+		CompletedRequirements: summary.CompletedRequirements,
+		TotalRequirements:     summary.TotalRequirements,
+		NextDeadlineAt:        nextDeadlineAt,
+		IsDeadlineNear:        summary.IsDeadlineNear,
+		IsOverdue:             summary.IsOverdue,
+	}
+}
+
+func toDreamTrackerProgramInfoResponse(info model.DreamTrackerProgramInfo) dto.DreamTrackerProgramInfoResponse {
+	var admissionDeadline *string
+	if info.AdmissionDeadline != nil {
+		value := info.AdmissionDeadline.UTC().Format(time.RFC3339)
+		admissionDeadline = &value
+	}
+	return dto.DreamTrackerProgramInfoResponse{
+		ProgramID:         info.ProgramID,
+		ProgramName:       info.ProgramName,
+		UniversityName:    info.UniversityName,
+		AdmissionName:     info.AdmissionName,
+		Intake:            info.Intake,
+		AdmissionURL:      info.AdmissionURL,
+		AdmissionDeadline: admissionDeadline,
+	}
+}
+
+func toDreamTrackerMilestoneResponses(items []model.DreamKeyMilestone) []dto.DreamTrackerMilestoneResponse {
+	milestones := make([]dto.DreamTrackerMilestoneResponse, 0, len(items))
+	for _, item := range items {
+		var deadlineDate *string
+		if item.DeadlineDate != nil {
+			value := item.DeadlineDate.UTC().Format(time.RFC3339)
+			deadlineDate = &value
+		}
+		milestones = append(milestones, dto.DreamTrackerMilestoneResponse{
+			DreamMilestoneID: item.DreamMilestoneID,
+			Title:            item.Title,
+			Description:      item.Description,
+			DeadlineDate:     deadlineDate,
+			IsRequired:       item.IsRequired,
+			Status:           string(item.Status),
+			CreatedAt:        item.CreatedAt.UTC().Format(time.RFC3339),
+			UpdatedAt:        item.UpdatedAt.UTC().Format(time.RFC3339),
+		})
+	}
+	return milestones
+}
+
+func toDreamTrackerFundingResponses(items []model.DreamTrackerFundingOption) []dto.DreamTrackerFundingResponse {
+	fundings := make([]dto.DreamTrackerFundingResponse, 0, len(items))
+	for _, item := range items {
+		fundings = append(fundings, dto.DreamTrackerFundingResponse{
+			FundingID:      item.FundingID,
+			NamaBeasiswa:   item.NamaBeasiswa,
+			Deskripsi:      item.Deskripsi,
+			Provider:       item.Provider,
+			TipePembiayaan: string(item.TipePembiayaan),
+			Website:        item.Website,
+			Status:         string(item.Status),
+		})
+	}
+	return fundings
 }
 
 func isValidUUID(value string) bool {
