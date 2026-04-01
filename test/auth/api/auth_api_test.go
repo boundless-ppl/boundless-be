@@ -88,6 +88,15 @@ func TestRootRouteSuccessApi(t *testing.T) {
 	if string(body) != "hi\n" {
 		t.Fatalf("expected body hi, got %q", string(body))
 	}
+	if rec.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatal("expected X-Content-Type-Options header")
+	}
+	if rec.Header().Get("X-Frame-Options") != "DENY" {
+		t.Fatal("expected X-Frame-Options header")
+	}
+	if rec.Header().Get("Referrer-Policy") != "no-referrer" {
+		t.Fatal("expected Referrer-Policy header")
+	}
 }
 
 func TestUnknownRouteReturnsNotFoundApi(t *testing.T) {

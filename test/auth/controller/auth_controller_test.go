@@ -137,6 +137,24 @@ func TestLoginInvalidCredentialsController(t *testing.T) {
 	}
 }
 
+func TestLoginLockedAccountController(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &fakeAuthService{loginErr: service.ErrAccountLocked}
+	c := controller.NewAuthController(svc)
+	router := gin.New()
+	router.POST("/auth/login", c.Login)
+
+	body, _ := json.Marshal(dto.LoginRequest{Email: "alice@example.com", Password: "wrong"})
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected status %d, got %d", http.StatusTooManyRequests, rec.Code)
+	}
+}
+
 func TestLoginInvalidBodyController(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	svc := &fakeAuthService{}

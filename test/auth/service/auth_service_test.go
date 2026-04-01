@@ -125,6 +125,33 @@ func TestLoginWrongPasswordService(t *testing.T) {
 	}
 }
 
+func TestLoginLocksAccountAfterMaxFailuresService(t *testing.T) {
+	userRepo := newTestUserRepoService()
+	authService := service.NewAuthService(userRepo)
+
+	_ = authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", "Secret123!")
+
+	for i := 0; i < service.MaxFailedAttempts-1; i++ {
+		_, err := authService.Login(context.Background(), "alice@example.com", "Wrong123!")
+		if !errors.Is(err, service.ErrInvalidCredentials) {
+			t.Fatalf("attempt %d: expected %v, got %v", i+1, service.ErrInvalidCredentials, err)
+		}
+	}
+
+	_, err := authService.Login(context.Background(), "alice@example.com", "Wrong123!")
+	if !errors.Is(err, service.ErrAccountLocked) {
+		t.Fatalf("expected %v, got %v", service.ErrAccountLocked, err)
+	}
+
+	user, err := userRepo.FindByEmail(context.Background(), "alice@example.com")
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if user.LockedUntil.IsZero() {
+		t.Fatal("expected user to be locked")
+	}
+}
+
 func TestLoginUpdateErrorService(t *testing.T) {
 	userRepo := newTestUserRepoService()
 	authService := service.NewAuthService(userRepo)
