@@ -5,6 +5,7 @@ import "time"
 type RecommendationResultSet struct {
 	ResultSetID               string
 	RecSubmissionID           string
+	SubmissionID              *string
 	VersionNo                 int
 	GeneratedAt               time.Time
 	StudentProfileSummaryJSON string
@@ -18,7 +19,9 @@ type RecommendationResultSet struct {
 type RecommendationResult struct {
 	RecResultID                    string
 	ResultSetID                    string
+	ProgramID                      string
 	RankNo                         int
+	Score                          int
 	UniversityName                 string
 	ProgramName                    string
 	Country                        string

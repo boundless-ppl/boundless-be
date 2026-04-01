@@ -4,13 +4,11 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"path/filepath"
 	"strings"
 
 	"boundless-be/errs"
 
 	"cloud.google.com/go/storage"
-	"github.com/google/uuid"
 )
 
 type GCSDocumentStorage struct {
@@ -37,30 +35,12 @@ func NewGCSDocumentStorage(ctx context.Context, bucketName, publicBaseURL string
 }
 
 func (s *GCSDocumentStorage) Upload(ctx context.Context, input UploadInput) (StoredObject, error) {
-	if input.Header == nil {
-		return StoredObject{}, errs.ErrInvalidInput
-	}
-
-	src, err := input.Header.Open()
+	src, objectName, buffer, n, err := openUploadSource(input)
 	if err != nil {
-		return StoredObject{}, fmt.Errorf("open file: %w", err)
+		return StoredObject{}, err
 	}
 	defer src.Close()
-
-	ext := strings.ToLower(filepath.Ext(input.Header.Filename))
-	if _, ok := allowedDocumentExtensions[ext]; !ok {
-		return StoredObject{}, errs.ErrInvalidInput
-	}
-
-	objectName := fmt.Sprintf("%s/%s/%s%s", input.UserID, input.DocumentType, uuid.NewString(), ext)
 	writer := s.client.Bucket(s.bucketName).Object(objectName).NewWriter(ctx)
-
-	buffer := make([]byte, 512)
-	n, err := src.Read(buffer)
-	if err != nil && err != io.EOF {
-		_ = writer.Close()
-		return StoredObject{}, fmt.Errorf("read file header: %w", err)
-	}
 
 	contentType := detectContentType(buffer[:n])
 	writer.ContentType = contentType
@@ -90,14 +70,9 @@ func (s *GCSDocumentStorage) Upload(ctx context.Context, input UploadInput) (Sto
 		return StoredObject{}, fmt.Errorf("finalize gcs upload: %w", err)
 	}
 
-	publicURL := fmt.Sprintf("https://storage.googleapis.com/%s/%s", s.bucketName, objectName)
-	if s.publicBaseURL != "" {
-		publicURL = s.publicBaseURL + "/" + objectName
-	}
-
 	return StoredObject{
 		StoragePath: objectName,
-		PublicURL:   publicURL,
+		PublicURL:   buildPublicObjectURL(fmt.Sprintf("https://storage.googleapis.com/%s/%s", s.bucketName, objectName), s.publicBaseURL, objectName),
 		SizeBytes:   size,
 		MIMEType:    contentType,
 	}, nil

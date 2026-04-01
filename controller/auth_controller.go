@@ -13,6 +13,12 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+const (
+	authFailedMessage    = "authentication failed"
+	invalidInputMessage  = "invalid input"
+	requestFailedMessage = "request failed"
+)
+
 type AuthService interface {
 	Register(ctx context.Context, fullName, role, email, password string) error
 	Login(ctx context.Context, email, password string) (service.AuthTokens, error)
@@ -30,7 +36,7 @@ func NewAuthController(authService AuthService) *AuthController {
 func (c *AuthController) Register(ctx *gin.Context) {
 	var req dto.RegisterRequest
 	if err := ctx.ShouldBindJSON(&req); err != nil {
-		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: "invalid input"})
+		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: invalidInputMessage})
 		return
 	}
 
@@ -39,11 +45,11 @@ func (c *AuthController) Register(ctx *gin.Context) {
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrInvalidInput):
-			ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: "invalid input"})
+			ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: invalidInputMessage})
 		case errors.Is(err, repository.ErrEmailExists):
-			ctx.JSON(http.StatusConflict, dto.ErrorResponse{Error: "request failed"})
+			ctx.JSON(http.StatusConflict, dto.ErrorResponse{Error: requestFailedMessage})
 		default:
-			ctx.JSON(http.StatusInternalServerError, dto.ErrorResponse{Error: "request failed"})
+			ctx.JSON(http.StatusInternalServerError, dto.ErrorResponse{Error: requestFailedMessage})
 		}
 		return
 	}
@@ -56,13 +62,13 @@ func (c *AuthController) Register(ctx *gin.Context) {
 func (c *AuthController) Login(ctx *gin.Context) {
 	var req dto.LoginRequest
 	if err := ctx.ShouldBindJSON(&req); err != nil {
-		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: "invalid input"})
+		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: invalidInputMessage})
 		return
 	}
 
 	tokens, err := c.authService.Login(ctx.Request.Context(), req.Email, req.Password)
 	if err != nil {
-		ctx.JSON(http.StatusUnauthorized, dto.ErrorResponse{Error: "authentication failed"})
+		ctx.JSON(http.StatusUnauthorized, dto.ErrorResponse{Error: authFailedMessage})
 		return
 	}
 
@@ -75,12 +81,12 @@ func (c *AuthController) Login(ctx *gin.Context) {
 func (c *AuthController) Logout(ctx *gin.Context) {
 	token, exists := ctx.Get(middleware.TokenContextKey)
 	if !exists {
-		ctx.JSON(http.StatusUnauthorized, dto.ErrorResponse{Error: "authentication failed"})
+		ctx.JSON(http.StatusUnauthorized, dto.ErrorResponse{Error: authFailedMessage})
 		return
 	}
 
 	if err := c.authService.Logout(token.(string)); err != nil {
-		ctx.JSON(http.StatusUnauthorized, dto.ErrorResponse{Error: "authentication failed"})
+		ctx.JSON(http.StatusUnauthorized, dto.ErrorResponse{Error: authFailedMessage})
 		return
 	}
 

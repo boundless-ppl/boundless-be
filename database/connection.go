@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	// Register the pgx driver with database/sql so sql.Open("pgx", ...) works.
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 

@@ -8,13 +8,15 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+const universityIDPath = "/universities/:id"
+
 func registerUnivRoutes(router *gin.Engine, repo repository.UniversityRepository) {
 	svc := service.NewUniversityService(repo)
 	ctrl := controller.NewUniversityController(svc)
 
 	router.POST("/universities", ctrl.Create)
 	router.GET("/universities", ctrl.GetAll)
-	router.GET("/universities/:id", ctrl.GetByID)
-	router.PATCH("/universities/:id", ctrl.Update)
-	router.DELETE("/universities/:id", ctrl.Delete)
+	router.GET(universityIDPath, ctrl.GetByID)
+	router.PATCH(universityIDPath, ctrl.Update)
+	router.DELETE(universityIDPath, ctrl.Delete)
 }

@@ -9,8 +9,6 @@ import (
 	"strings"
 
 	"boundless-be/errs"
-
-	"github.com/google/uuid"
 )
 
 type LocalDocumentStorage struct {
@@ -30,22 +28,11 @@ func NewLocalDocumentStorage(baseDir, baseURL string) *LocalDocumentStorage {
 
 func (s *LocalDocumentStorage) Upload(ctx context.Context, input UploadInput) (StoredObject, error) {
 	_ = ctx
-	if input.Header == nil {
-		return StoredObject{}, errs.ErrInvalidInput
-	}
-
-	src, err := input.Header.Open()
+	src, objectName, buffer, n, err := openUploadSource(input)
 	if err != nil {
-		return StoredObject{}, fmt.Errorf("open file: %w", err)
+		return StoredObject{}, err
 	}
 	defer src.Close()
-
-	ext := strings.ToLower(filepath.Ext(input.Header.Filename))
-	if _, ok := allowedDocumentExtensions[ext]; !ok {
-		return StoredObject{}, errs.ErrInvalidInput
-	}
-
-	objectName := fmt.Sprintf("%s/%s/%s%s", input.UserID, input.DocumentType, uuid.NewString(), ext)
 	fullPath := filepath.Join(s.baseDir, objectName)
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
 		return StoredObject{}, fmt.Errorf("create directory: %w", err)
@@ -56,12 +43,6 @@ func (s *LocalDocumentStorage) Upload(ctx context.Context, input UploadInput) (S
 		return StoredObject{}, fmt.Errorf("create file: %w", err)
 	}
 	defer dst.Close()
-
-	buffer := make([]byte, 512)
-	n, err := src.Read(buffer)
-	if err != nil && err != io.EOF {
-		return StoredObject{}, fmt.Errorf("read file header: %w", err)
-	}
 
 	if n > 0 {
 		if _, err := dst.Write(buffer[:n]); err != nil {
@@ -82,20 +63,15 @@ func (s *LocalDocumentStorage) Upload(ctx context.Context, input UploadInput) (S
 		return StoredObject{}, errs.ErrInvalidInput
 	}
 
-	publicURL := fullPath
-	if s.baseURL != "" {
-		publicURL = s.baseURL + "/" + filepath.ToSlash(objectName)
-	}
-
 	return StoredObject{
 		StoragePath: fullPath,
-		PublicURL:   publicURL,
+		PublicURL:   buildPublicObjectURL(fullPath, s.baseURL, objectName),
 		SizeBytes:   size,
 		MIMEType:    detectContentType(buffer[:n]),
 	}, nil
 }
 
-func mustBuildDocumentStorage() DocumentStorage {
+func mustBuildDocumentStorage() DocumentUploader {
 	provider := strings.ToLower(strings.TrimSpace(os.Getenv("DOCUMENT_STORAGE_PROVIDER")))
 	switch provider {
 	case "", "local":

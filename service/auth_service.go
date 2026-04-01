@@ -99,7 +99,7 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (AuthTo
 
 	if !checkPassword(user.PasswordHash, password) {
 		user = trackFailedLogin(user, now)
-		if updateErr := s.userRepo.Update(ctx, user); updateErr != nil {
+		if err := s.userRepo.Update(ctx, user); err != nil {
 			return AuthTokens{}, ErrInvalidCredentials
 		}
 		if user.LockedUntil.After(now) {

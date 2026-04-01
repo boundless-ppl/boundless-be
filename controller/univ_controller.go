@@ -13,6 +13,13 @@ import (
 	"github.com/google/uuid"
 )
 
+const (
+	universityInvalidInputMessage  = "invalid input"
+	universityInternalErrorMessage = "internal server error"
+	universityInvalidIDMessage     = "invalid id format"
+	universityNotFoundMessage      = "university not found"
+)
+
 type UniversityController struct {
 	service *service.UniversityService
 }
@@ -38,19 +45,19 @@ func (c *UniversityController) Create(ctx *gin.Context) {
 	var req dto.CreateUniversityRequest
 
 	if err := ctx.ShouldBindJSON(&req); err != nil {
-		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: "invalid input"})
+		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: universityInvalidInputMessage})
 		return
 	}
 
 	result, err := c.service.CreateUniversity(ctx.Request.Context(), req)
 	if err != nil {
 		if errors.Is(err, errs.ErrInvalidInput) {
-			ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: "invalid input"})
+			ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: universityInvalidInputMessage})
 			return
 		}
 
 		ctx.JSON(http.StatusInternalServerError, dto.ErrorResponse{
-			Error: "internal server error",
+			Error: universityInternalErrorMessage,
 		})
 		return
 	}
@@ -63,7 +70,7 @@ func (c *UniversityController) GetAll(ctx *gin.Context) {
 
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, dto.ErrorResponse{
-			Error: "internal server error",
+			Error: universityInternalErrorMessage,
 		})
 		return
 	}
@@ -82,7 +89,7 @@ func (c *UniversityController) GetByID(ctx *gin.Context) {
 
 	if _, err := uuid.Parse(id); err != nil {
 		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{
-			Error: "invalid id format",
+			Error: universityInvalidIDMessage,
 		})
 		return
 	}
@@ -91,13 +98,13 @@ func (c *UniversityController) GetByID(ctx *gin.Context) {
 	if err != nil {
 		if errors.Is(err, errs.ErrUniversityNotFound) {
 			ctx.JSON(http.StatusNotFound, dto.ErrorResponse{
-				Error: "university not found",
+				Error: universityNotFoundMessage,
 			})
 			return
 		}
 
 		ctx.JSON(http.StatusInternalServerError, dto.ErrorResponse{
-			Error: "internal server error",
+			Error: universityInternalErrorMessage,
 		})
 		return
 	}
@@ -110,14 +117,14 @@ func (c *UniversityController) Update(ctx *gin.Context) {
 
 	if _, err := uuid.Parse(id); err != nil {
 		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{
-			Error: "invalid id format",
+			Error: universityInvalidIDMessage,
 		})
 		return
 	}
 
 	var req dto.UpdateUniversityRequest
 	if err := ctx.ShouldBindJSON(&req); err != nil {
-		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: "invalid input"})
+		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: universityInvalidInputMessage})
 		return
 	}
 
@@ -125,13 +132,13 @@ func (c *UniversityController) Update(ctx *gin.Context) {
 	if err != nil {
 		if errors.Is(err, errs.ErrUniversityNotFound) {
 			ctx.JSON(http.StatusNotFound, dto.ErrorResponse{
-				Error: "university not found",
+				Error: universityNotFoundMessage,
 			})
 			return
 		}
 
 		ctx.JSON(http.StatusInternalServerError, dto.ErrorResponse{
-			Error: "internal server error",
+			Error: universityInternalErrorMessage,
 		})
 		return
 	}
@@ -144,7 +151,7 @@ func (c *UniversityController) Delete(ctx *gin.Context) {
 
 	if _, err := uuid.Parse(id); err != nil {
 		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{
-			Error: "invalid id format",
+			Error: universityInvalidIDMessage,
 		})
 		return
 	}
@@ -153,13 +160,13 @@ func (c *UniversityController) Delete(ctx *gin.Context) {
 	if err != nil {
 		if errors.Is(err, errs.ErrUniversityNotFound) {
 			ctx.JSON(http.StatusNotFound, dto.ErrorResponse{
-				Error: "university not found",
+				Error: universityNotFoundMessage,
 			})
 			return
 		}
 
 		ctx.JSON(http.StatusInternalServerError, dto.ErrorResponse{
-			Error: "internal server error",
+			Error: universityInternalErrorMessage,
 		})
 		return
 	}

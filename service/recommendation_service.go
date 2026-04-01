@@ -43,7 +43,7 @@ type StoredObject struct {
 	MIMEType    string
 }
 
-type DocumentStorage interface {
+type DocumentUploader interface {
 	Upload(ctx context.Context, input UploadInput) (StoredObject, error)
 }
 
@@ -79,7 +79,7 @@ type CreateRecommendationWorkflowOutput struct {
 
 type RecommendationService struct {
 	repo        repository.RecommendationRepository
-	storage     DocumentStorage
+	storage     DocumentUploader
 	aiClient    RecommendationAIClient
 	hasAIClient bool
 }
@@ -101,7 +101,7 @@ func NewRecommendationService(repo repository.RecommendationRepository) *Recomme
 
 func NewRecommendationServiceWithDeps(
 	repo repository.RecommendationRepository,
-	storage DocumentStorage,
+	storage DocumentUploader,
 	aiClient RecommendationAIClient,
 ) *RecommendationService {
 	return &RecommendationService{
@@ -462,31 +462,7 @@ func mapAIResultsToRows(
 
 	rows := make([]model.RecommendationResult, 0, len(resp.TopRecommendations))
 	for _, item := range resp.TopRecommendations {
-		scoreBreakdownJSON, err := json.Marshal(item.ScoreBreakdown)
-		if err != nil {
-			return nil, err
-		}
-		preferenceReasoningJSON, err := json.Marshal(item.PreferenceReasoning)
-		if err != nil {
-			return nil, err
-		}
-		matchEvidenceJSON, err := json.Marshal(item.MatchEvidence)
-		if err != nil {
-			return nil, err
-		}
-		scholarshipJSON, err := json.Marshal(item.ScholarshipRecommendations)
-		if err != nil {
-			return nil, err
-		}
-		prosJSON, err := json.Marshal(item.Pros)
-		if err != nil {
-			return nil, err
-		}
-		consJSON, err := json.Marshal(item.Cons)
-		if err != nil {
-			return nil, err
-		}
-		rawJSON, err := json.Marshal(item)
+		payloads, err := marshalRecommendationPayloads(item)
 		if err != nil {
 			return nil, err
 		}
@@ -503,17 +479,17 @@ func mapAIResultsToRows(
 			OverallRecommendationScore:     item.OverallRecommendationScore,
 			FitLevel:                       item.FitLevel,
 			AdmissionDifficulty:            item.AdmissionDifficulty,
-			ScoreBreakdownJSON:             string(scoreBreakdownJSON),
+			ScoreBreakdownJSON:             payloads.ScoreBreakdownJSON,
 			Overview:                       item.Overview,
 			WhyThisUniversity:              item.WhyThisUniversity,
 			WhyThisProgram:                 item.WhyThisProgram,
-			PreferenceReasoningJSON:        string(preferenceReasoningJSON),
-			MatchEvidenceJSON:              string(matchEvidenceJSON),
-			ScholarshipRecommendationsJSON: string(scholarshipJSON),
+			PreferenceReasoningJSON:        payloads.PreferenceReasoningJSON,
+			MatchEvidenceJSON:              payloads.MatchEvidenceJSON,
+			ScholarshipRecommendationsJSON: payloads.ScholarshipRecommendationsJSON,
 			ReasonSummary:                  resp.SelectionReasoning,
-			ProsJSON:                       string(prosJSON),
-			ConsJSON:                       string(consJSON),
-			RawRecommendationJSON:          string(rawJSON),
+			ProsJSON:                       payloads.ProsJSON,
+			ConsJSON:                       payloads.ConsJSON,
+			RawRecommendationJSON:          payloads.RawRecommendationJSON,
 			CreatedAt:                      now,
 		})
 	}
@@ -605,4 +581,55 @@ func detectContentType(data []byte) string {
 		return "application/octet-stream"
 	}
 	return contentType
+}
+
+type recommendationPayloads struct {
+	ScoreBreakdownJSON             string
+	PreferenceReasoningJSON        string
+	MatchEvidenceJSON              string
+	ScholarshipRecommendationsJSON string
+	ProsJSON                       string
+	ConsJSON                       string
+	RawRecommendationJSON          string
+}
+
+func marshalRecommendationPayloads(item dto.GlobalMatchAITopRecommendationResponse) (recommendationPayloads, error) {
+	scoreBreakdownJSON, err := json.Marshal(item.ScoreBreakdown)
+	if err != nil {
+		return recommendationPayloads{}, err
+	}
+	preferenceReasoningJSON, err := json.Marshal(item.PreferenceReasoning)
+	if err != nil {
+		return recommendationPayloads{}, err
+	}
+	matchEvidenceJSON, err := json.Marshal(item.MatchEvidence)
+	if err != nil {
+		return recommendationPayloads{}, err
+	}
+	scholarshipJSON, err := json.Marshal(item.ScholarshipRecommendations)
+	if err != nil {
+		return recommendationPayloads{}, err
+	}
+	prosJSON, err := json.Marshal(item.Pros)
+	if err != nil {
+		return recommendationPayloads{}, err
+	}
+	consJSON, err := json.Marshal(item.Cons)
+	if err != nil {
+		return recommendationPayloads{}, err
+	}
+	rawJSON, err := json.Marshal(item)
+	if err != nil {
+		return recommendationPayloads{}, err
+	}
+
+	return recommendationPayloads{
+		ScoreBreakdownJSON:             string(scoreBreakdownJSON),
+		PreferenceReasoningJSON:        string(preferenceReasoningJSON),
+		MatchEvidenceJSON:              string(matchEvidenceJSON),
+		ScholarshipRecommendationsJSON: string(scholarshipJSON),
+		ProsJSON:                       string(prosJSON),
+		ConsJSON:                       string(consJSON),
+		RawRecommendationJSON:          string(rawJSON),
+	}, nil
 }
