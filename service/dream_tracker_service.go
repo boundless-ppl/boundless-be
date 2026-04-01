@@ -272,28 +272,11 @@ func buildDreamTrackerSummary(
 	summary := model.DreamTrackerSummary{
 		TotalRequirements: len(requirements),
 	}
-	for _, requirement := range requirements {
-		if requirement.Status == model.DreamRequirementStatusUploaded || requirement.Status == model.DreamRequirementStatusVerified {
-			summary.CompletedRequirements++
-		}
-	}
-	if summary.TotalRequirements > 0 {
-		summary.CompletionPercentage = (summary.CompletedRequirements * 100) / summary.TotalRequirements
-	}
+	summary.CompletedRequirements = countCompletedRequirements(requirements)
+	summary.CompletionPercentage = calculateCompletionPercentage(summary.CompletedRequirements, summary.TotalRequirements)
 
 	now := time.Now().UTC()
-	var nextDeadline *time.Time
-	for _, milestone := range milestones {
-		if milestone.DeadlineDate == nil {
-			continue
-		}
-		if milestone.DeadlineDate.Before(now) {
-			continue
-		}
-		if nextDeadline == nil || milestone.DeadlineDate.Before(*nextDeadline) {
-			nextDeadline = milestone.DeadlineDate
-		}
-	}
+	nextDeadline := nextUpcomingDeadline(milestones, now)
 	if nextDeadline == nil {
 		nextDeadline = admissionDeadline
 	}
@@ -306,6 +289,44 @@ func buildDreamTrackerSummary(
 		summary.IsOverdue = true
 	}
 	return summary
+}
+
+func countCompletedRequirements(requirements []model.DreamRequirementDetail) int {
+	completed := 0
+	for _, requirement := range requirements {
+		if isCompletedRequirement(requirement.Status) {
+			completed++
+		}
+	}
+	return completed
+}
+
+func isCompletedRequirement(status model.DreamRequirementStatusValue) bool {
+	return status == model.DreamRequirementStatusUploaded || status == model.DreamRequirementStatusVerified
+}
+
+func calculateCompletionPercentage(completed, total int) int {
+	if total == 0 {
+		return 0
+	}
+	return (completed * 100) / total
+}
+
+func nextUpcomingDeadline(milestones []model.DreamKeyMilestone, now time.Time) *time.Time {
+	var nextDeadline *time.Time
+	for _, milestone := range milestones {
+		if !isUpcomingMilestone(milestone, now) {
+			continue
+		}
+		if nextDeadline == nil || milestone.DeadlineDate.Before(*nextDeadline) {
+			nextDeadline = milestone.DeadlineDate
+		}
+	}
+	return nextDeadline
+}
+
+func isUpcomingMilestone(milestone model.DreamKeyMilestone, now time.Time) bool {
+	return milestone.DeadlineDate != nil && !milestone.DeadlineDate.Before(now)
 }
 
 func isPDFDocument(doc model.Document) bool {

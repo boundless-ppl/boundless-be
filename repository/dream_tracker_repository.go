@@ -524,13 +524,8 @@ func (r *DBDreamTrackerRepository) findDreamTrackerFundings(ctx context.Context,
 		return []model.DreamTrackerFundingOption{}, nil
 	}
 
-	if tracker.AdmissionID == nil && tracker.FundingID != nil {
-		selectedFunding, err := r.findFundingByID(ctx, *tracker.FundingID)
-		if err != nil {
-			return nil, err
-		}
-		selectedFunding.Status = model.DreamTrackerFundingStatusSelected
-		return []model.DreamTrackerFundingOption{selectedFunding}, nil
+	if tracker.AdmissionID == nil {
+		return r.findSelectedFundingOnly(ctx, tracker)
 	}
 
 	query := `
@@ -552,25 +547,54 @@ func (r *DBDreamTrackerRepository) findDreamTrackerFundings(ctx context.Context,
 		if err != nil {
 			return nil, err
 		}
-		if tracker.FundingID != nil && item.FundingID == *tracker.FundingID {
-			item.Status = model.DreamTrackerFundingStatusSelected
-		} else {
-			item.Status = model.DreamTrackerFundingStatusAvailable
-		}
+		item.Status = fundingStatusForTracker(item.FundingID, tracker.FundingID)
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate dream tracker fundings: %w", err)
 	}
-	if len(items) == 0 && tracker.FundingID != nil {
-		selectedFunding, err := r.findFundingByID(ctx, *tracker.FundingID)
-		if err != nil {
-			return nil, err
-		}
-		selectedFunding.Status = model.DreamTrackerFundingStatusSelected
-		items = append(items, selectedFunding)
+	items, err = r.appendMissingSelectedFunding(ctx, items, tracker.FundingID)
+	if err != nil {
+		return nil, err
 	}
 	return items, nil
+}
+
+func (r *DBDreamTrackerRepository) findSelectedFundingOnly(ctx context.Context, tracker model.DreamTracker) ([]model.DreamTrackerFundingOption, error) {
+	if tracker.FundingID == nil {
+		return []model.DreamTrackerFundingOption{}, nil
+	}
+
+	selectedFunding, err := r.findFundingByID(ctx, *tracker.FundingID)
+	if err != nil {
+		return nil, err
+	}
+	selectedFunding.Status = model.DreamTrackerFundingStatusSelected
+	return []model.DreamTrackerFundingOption{selectedFunding}, nil
+}
+
+func (r *DBDreamTrackerRepository) appendMissingSelectedFunding(
+	ctx context.Context,
+	items []model.DreamTrackerFundingOption,
+	fundingID *string,
+) ([]model.DreamTrackerFundingOption, error) {
+	if len(items) > 0 || fundingID == nil {
+		return items, nil
+	}
+
+	selectedFunding, err := r.findFundingByID(ctx, *fundingID)
+	if err != nil {
+		return nil, err
+	}
+	selectedFunding.Status = model.DreamTrackerFundingStatusSelected
+	return append(items, selectedFunding), nil
+}
+
+func fundingStatusForTracker(fundingID string, selectedFundingID *string) model.DreamTrackerFundingStatus {
+	if selectedFundingID != nil && fundingID == *selectedFundingID {
+		return model.DreamTrackerFundingStatusSelected
+	}
+	return model.DreamTrackerFundingStatusAvailable
 }
 
 func (r *DBDreamTrackerRepository) findFundingByID(ctx context.Context, fundingID string) (model.DreamTrackerFundingOption, error) {
