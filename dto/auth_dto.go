@@ -2,7 +2,6 @@ package dto
 
 type RegisterRequest struct {
 	NamaLengkap string `json:"nama_lengkap" binding:"required"`
-	Role        string `json:"role" binding:"required"`
 	Email       string `json:"email" binding:"required,email"`
 	Password    string `json:"password" binding:"required"`
 }

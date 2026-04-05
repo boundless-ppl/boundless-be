@@ -60,30 +60,30 @@ func NewAuthService(userRepo repository.UserRepository) *AuthService {
 	}
 }
 
-func (s *AuthService) Register(ctx context.Context, fullName, role, email, password string) (AuthTokens, error) {
+func (s *AuthService) Register(ctx context.Context, fullName, role, email, password string) error {
 	if !model.IsPasswordComplex(password) {
-		return AuthTokens{}, ErrInvalidInput
+		return ErrInvalidInput
 	}
 
 	passwordHash, err := hashPassword(password)
 	if err != nil {
-		return AuthTokens{}, ErrInvalidInput
+		return ErrInvalidInput
 	}
 
 	userID := newID()
 	user, err := model.NewUser(userID, fullName, role, email, passwordHash)
 	if err != nil {
-		return AuthTokens{}, ErrInvalidInput
+		return ErrInvalidInput
 	}
 
 	if _, err := s.userRepo.Create(ctx, user); err != nil {
 		if errors.Is(err, repository.ErrEmailExists) {
-			return AuthTokens{}, repository.ErrEmailExists
+			return repository.ErrEmailExists
 		}
-		return AuthTokens{}, ErrInvalidInput
+		return ErrInvalidInput
 	}
 
-	return s.tokenProvider.IssueTokens(user.UserID, user.Role)
+	return nil
 }
 
 func (s *AuthService) Login(ctx context.Context, email, password string) (AuthTokens, error) {
@@ -99,7 +99,7 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (AuthTo
 
 	if !checkPassword(user.PasswordHash, password) {
 		user = trackFailedLogin(user, now)
-		if updateErr := s.userRepo.Update(ctx, user); updateErr != nil {
+		if err := s.userRepo.Update(ctx, user); err != nil {
 			return AuthTokens{}, ErrInvalidCredentials
 		}
 		if user.LockedUntil.After(now) {

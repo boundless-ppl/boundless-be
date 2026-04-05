@@ -12,6 +12,7 @@ import (
 
 	"boundless-be/api"
 	"boundless-be/database"
+	"boundless-be/debug"
 	"boundless-be/repository"
 
 	"github.com/joho/godotenv"
@@ -22,6 +23,8 @@ func main() {
 		log.Fatalf("failed to load .env: %v", err)
 	}
 
+	debug.StartPprofServer(os.Getenv("PPROF_ADDR"))
+
 	databaseURL := os.Getenv("DATABASE_URL")
 	db, err := database.NewConnection(databaseURL)
 	if err != nil {
@@ -31,7 +34,15 @@ func main() {
 
 	log.Println("database connected")
 	userRepo := repository.NewUserRepository(db)
-	handler := api.NewHandler(userRepo)
+	univRepo := repository.NewUniversityRepository(db)
+	recRepo := repository.NewRecommendationRepository(db)
+	dreamTrackerRepo := repository.NewDreamTrackerRepository(db)
+	handler := api.NewHandler(api.Dependencies{
+		UserRepo:         userRepo,
+		UnivRepo:         univRepo,
+		RecRepo:          recRepo,
+		DreamTrackerRepo: dreamTrackerRepo,
+	})
 
 	port := os.Getenv("PORT")
 	if port == "" {

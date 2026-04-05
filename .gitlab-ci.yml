@@ -1,5 +1,45 @@
 stages:
+  - test
+  - benchmark
+  - monitor
   - sonar
+
+go_test:
+  stage: test
+  image: golang:1.24
+  script:
+    - bash scripts/run-tests.sh
+  artifacts:
+    when: always
+    paths:
+      - .artifacts/test/coverage.out
+      - .artifacts/test/coverage-summary.txt
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+
+go_benchmark:
+  stage: benchmark
+  image: golang:1.24
+  script:
+    - bash scripts/run-benchmarks.sh
+  artifacts:
+    when: always
+    paths:
+      - .artifacts/bench/bench.txt
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+
+staging_monitoring:
+  stage: monitor
+  image: curlimages/curl:latest
+  script:
+    - bash scripts/check-monitoring.sh
+  rules:
+    - if: '$APP_URL && $PPROF_BASE_URL'
+      when: manual
+    - when: never
 
 sonarcloud:
   stage: sonar

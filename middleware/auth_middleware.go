@@ -8,12 +8,12 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type TokenService interface {
-	ValidateAccessToken(token string) (service.TokenClaims, error)
+type AuthMiddleware struct {
+	tokenService AccessTokenValidator
 }
 
-type AuthMiddleware struct {
-	tokenService TokenService
+type AccessTokenValidator interface {
+	ValidateAccessToken(token string) (service.TokenClaims, error)
 }
 
 const (
@@ -22,7 +22,7 @@ const (
 	TokenContextKey  = "auth_token"
 )
 
-func NewAuthMiddleware(tokenService TokenService) *AuthMiddleware {
+func NewAuthMiddleware(tokenService AccessTokenValidator) *AuthMiddleware {
 	return &AuthMiddleware{tokenService: tokenService}
 }
 

@@ -6,16 +6,25 @@ import (
 	"errors"
 	"time"
 
+	// Register the pgx driver with database/sql so sql.Open("pgx", ...) works.
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 var ErrMissingDatabaseURL = errors.New("DATABASE_URL is required")
 
 func NewConnection(databaseURL string) (*sql.DB, error) {
+	return NewConnectionWithOpen(databaseURL, sql.Open)
+}
+
+func NewConnectionWithOpen(
+	databaseURL string,
+	open func(driverName, dsn string) (*sql.DB, error),
+) (*sql.DB, error) {
 	if databaseURL == "" {
 		return nil, ErrMissingDatabaseURL
 	}
 
-	db, err := sql.Open("pgx", databaseURL)
+	db, err := open("pgx", databaseURL)
 	if err != nil {
 		return nil, err
 	}

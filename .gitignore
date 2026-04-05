@@ -6,3 +6,4 @@ artifacts/
 coverage.out
 coverage.html
 *.test
+/.scannerwork
