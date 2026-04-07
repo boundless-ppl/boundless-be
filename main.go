@@ -7,12 +7,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"boundless-be/api"
 	"boundless-be/database"
 	"boundless-be/repository"
+	"boundless-be/service"
 
 	"github.com/joho/godotenv"
 )
@@ -33,11 +35,52 @@ func main() {
 	userRepo := repository.NewUserRepository(db)
 	univRepo := repository.NewUniversityRepository(db)
 	recRepo := repository.NewRecommendationRepository(db)
+	paymentRepo := repository.NewPaymentRepository(db)
 	handler := api.NewHandler(api.Dependencies{
-		UserRepo: userRepo,
-		UnivRepo: univRepo,
-		RecRepo:  recRepo,
+		UserRepo:    userRepo,
+		UnivRepo:    univRepo,
+		RecRepo:     recRepo,
+		PaymentRepo: paymentRepo,
 	})
+
+	appCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	adminEmail := strings.TrimSpace(os.Getenv("PAYMENT_ADMIN_EMAIL"))
+	if adminEmail != "" {
+		sender, err := service.NewSMTPEmailSenderFromEnv()
+		if err != nil {
+			log.Printf("payment notification email disabled: %v", err)
+		} else {
+			notifier := service.NewPaymentNotificationService(paymentRepo, sender, adminEmail)
+			interval := 5 * time.Minute
+			if raw := strings.TrimSpace(os.Getenv("PAYMENT_NOTIFICATION_INTERVAL")); raw != "" {
+				if parsed, err := time.ParseDuration(raw); err == nil && parsed > 0 {
+					interval = parsed
+				}
+			}
+
+			go func() {
+				ticker := time.NewTicker(interval)
+				defer ticker.Stop()
+
+				if err := notifier.RunOnce(appCtx); err != nil {
+					log.Printf("payment notification run failed: %v", err)
+				}
+
+				for {
+					select {
+					case <-appCtx.Done():
+						return
+					case <-ticker.C:
+						if err := notifier.RunOnce(appCtx); err != nil {
+							log.Printf("payment notification run failed: %v", err)
+						}
+					}
+				}
+			}()
+		}
+	}
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -60,6 +103,7 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
+	cancel()
 
 	log.Println("shutting down...")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
