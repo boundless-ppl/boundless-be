@@ -382,8 +382,34 @@ func TestCreatePaymentUsesSubscriptionSnapshotAndDefaultQris(t *testing.T) {
 	if repo.createPaymentInput.ExpiredAt == nil {
 		t.Fatal("expected expired at to be set")
 	}
+	if repo.createPaymentInput.PriceAmountSnapshot != 49900 {
+		t.Fatalf("expected discounted price snapshot 49900, got %d", repo.createPaymentInput.PriceAmountSnapshot)
+	}
 	if len(repo.createPaymentInput.BenefitsSnapshot) != 2 {
 		t.Fatalf("expected benefits copied, got %+v", repo.createPaymentInput.BenefitsSnapshot)
+	}
+}
+
+func TestListPackagesUsesDiscountedPrice(t *testing.T) {
+	repo := &fakePaymentRepo{
+		activeSubscriptions: []model.Subscription{{
+			SubscriptionID: "sub-1",
+			Name:           "The Scholar",
+			DurationMonths: 3,
+			PriceAmount:    299000,
+		}},
+	}
+	svc := service.NewPaymentServiceWithDeps(repo, &fakeDocumentStorage{})
+
+	out, err := svc.ListPackages(context.Background())
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("expected 1 package, got %d", len(out))
+	}
+	if out[0].PriceAmount != 29900 {
+		t.Fatalf("expected discounted price 29900, got %d", out[0].PriceAmount)
 	}
 }
 
