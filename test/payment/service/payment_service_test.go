@@ -479,6 +479,153 @@ func TestBuildPaymentInstructionIncludesTransactionContext(t *testing.T) {
 	}
 }
 
+func TestNewSMTPEmailSenderFromEnvValidation(t *testing.T) {
+	t.Setenv("SMTP_HOST", "")
+	_, err := service.NewSMTPEmailSenderFromEnv()
+	if err == nil {
+		t.Fatal("expected error when SMTP_HOST missing")
+	}
+}
+
+func TestNewSMTPEmailSenderFromEnvDefaults(t *testing.T) {
+	t.Setenv("SMTP_HOST", "smtp.gmail.com")
+	t.Setenv("SMTP_USERNAME", "sender@example.com")
+	t.Setenv("SMTP_PASSWORD", "secret")
+	t.Setenv("SMTP_FROM_EMAIL", "")
+	t.Setenv("SMTP_FROM_NAME", "")
+
+	sender, err := service.NewSMTPEmailSenderFromEnv()
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if sender == nil {
+		t.Fatal("expected sender")
+	}
+}
+
+func TestSMTPEmailSenderRejectsMissingRecipient(t *testing.T) {
+	sender := &service.SMTPEmailSender{}
+	err := sender.Send(context.Background(), "", "subject", "body")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestPaymentNotificationRunOnceReturnsSendError(t *testing.T) {
+	repo := &fakePaymentRepo{
+		notifications: []repository.PendingPaymentNotification{{
+			PaymentID:        "pay-1",
+			TransactionID:    "TX-1",
+			UserID:           "user-1",
+			UserName:         "Alice",
+			UserEmail:        "alice@example.com",
+			PackageName:      "The Scholar",
+			Amount:           299000,
+			ProofDocumentURL: "http://local/proof.pdf",
+			CreatedAt:        time.Now().UTC(),
+		}},
+	}
+	sender := &fakePaymentSender{err: errs.ErrExternalService}
+	svc := service.NewPaymentNotificationService(repo, sender, "admin@example.com")
+
+	err := svc.RunOnce(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestGetMyPaymentInvalidInput(t *testing.T) {
+	repo := &fakePaymentRepo{}
+	svc := service.NewPaymentServiceWithDeps(repo, &fakeDocumentStorage{})
+
+	_, err := svc.GetMyPayment(context.Background(), "", "")
+	if err != errs.ErrInvalidInput {
+		t.Fatalf("expected %v, got %v", errs.ErrInvalidInput, err)
+	}
+}
+
+func TestGetMyPaymentReturnsRepoErrorWhenUserSubLookupFails(t *testing.T) {
+	repo := &fakePaymentRepo{
+		paymentByUser:       model.Payment{PaymentID: "pay-1", UserID: "user-1", Status: model.PaymentStatusSuccess},
+		userSubByPaymentErr: errs.ErrExternalService,
+	}
+	svc := service.NewPaymentServiceWithDeps(repo, &fakeDocumentStorage{})
+
+	_, err := svc.GetMyPayment(context.Background(), "user-1", "pay-1")
+	if err != errs.ErrExternalService {
+		t.Fatalf("expected %v, got %v", errs.ErrExternalService, err)
+	}
+}
+
+func TestListAdminPaymentsInvalidStatus(t *testing.T) {
+	repo := &fakePaymentRepo{}
+	svc := service.NewPaymentServiceWithDeps(repo, &fakeDocumentStorage{})
+
+	_, err := svc.ListAdminPayments(context.Background(), "", "unknown", 1, 10)
+	if err != errs.ErrInvalidPaymentStatus {
+		t.Fatalf("expected %v, got %v", errs.ErrInvalidPaymentStatus, err)
+	}
+}
+
+func TestUpdatePaymentStatusInvalidInput(t *testing.T) {
+	repo := &fakePaymentRepo{}
+	svc := service.NewPaymentServiceWithDeps(repo, &fakeDocumentStorage{})
+
+	_, err := svc.UpdatePaymentStatus(context.Background(), "", "", string(model.PaymentStatusSuccess), nil, nil, nil)
+	if err != errs.ErrInvalidInput {
+		t.Fatalf("expected %v, got %v", errs.ErrInvalidInput, err)
+	}
+}
+
+func TestUpdatePaymentStatusSuccessWithExplicitStartDate(t *testing.T) {
+	repo := &fakePaymentRepo{
+		paymentByID: model.Payment{
+			PaymentID:              "pay-1",
+			TransactionID:          "tx-1",
+			UserID:                 "user-1",
+			SubscriptionID:         "sub-1",
+			PackageNameSnapshot:    "The Scholar",
+			DurationMonthsSnapshot: 1,
+			PriceAmountSnapshot:    100,
+			Status:                 model.PaymentStatusPending,
+		},
+	}
+	svc := service.NewPaymentServiceWithDeps(repo, &fakeDocumentStorage{})
+	start := "2026-04-10"
+
+	_, err := svc.UpdatePaymentStatus(context.Background(), "admin-1", "pay-1", "success", &start, nil, nil)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if repo.markSuccessParams.StartDate.Format("2006-01-02") != "2026-04-10" {
+		t.Fatalf("unexpected start date %s", repo.markSuccessParams.StartDate.Format("2006-01-02"))
+	}
+}
+
+func TestUploadProofForPaymentInvalidInput(t *testing.T) {
+	repo := &fakePaymentRepo{}
+	svc := service.NewPaymentServiceWithDeps(repo, &fakeDocumentStorage{})
+
+	_, err := svc.UploadProofForPayment(context.Background(), "", "", nil)
+	if err != errs.ErrInvalidInput {
+		t.Fatalf("expected %v, got %v", errs.ErrInvalidInput, err)
+	}
+}
+
+func TestUploadProofForPaymentAttachError(t *testing.T) {
+	repo := &fakePaymentRepo{
+		paymentByUser:  model.Payment{PaymentID: "pay-1", UserID: "user-1", Status: model.PaymentStatusPending},
+		attachProofErr: errs.ErrExternalService,
+	}
+	svc := service.NewPaymentServiceWithDeps(repo, &fakeDocumentStorage{stored: service.StoredObject{StoragePath: "x", PublicURL: "y", MIMEType: "application/pdf", SizeBytes: 10}})
+
+	header := makeProofHeader(t)
+	_, err := svc.UploadProofForPayment(context.Background(), "user-1", "pay-1", header)
+	if err != errs.ErrExternalService {
+		t.Fatalf("expected %v, got %v", errs.ErrExternalService, err)
+	}
+}
+
 func TestMain(m *testing.M) {
 	os.Setenv("DOCUMENT_STORAGE_PROVIDER", "local")
 	os.Setenv("DOCUMENT_STORAGE_DIR", os.TempDir())
