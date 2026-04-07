@@ -44,6 +44,7 @@ func (c *PaymentController) ListPackages(ctx *gin.Context) {
 
 	items := make([]dto.SubscriptionPackageResponse, 0, len(packages))
 	for _, pkg := range packages {
+		normalAmount, discountAmount := service.PaymentPriceBreakdownFromDiscounted(pkg.PriceAmount)
 		items = append(items, dto.SubscriptionPackageResponse{
 			SubscriptionID: pkg.SubscriptionID,
 			PackageKey:     pkg.PackageKey,
@@ -51,6 +52,8 @@ func (c *PaymentController) ListPackages(ctx *gin.Context) {
 			Description:    pkg.Description,
 			DurationMonths: pkg.DurationMonths,
 			PriceAmount:    pkg.PriceAmount,
+			NormalAmount:   normalAmount,
+			DiscountAmount: discountAmount,
 			Benefits:       pkg.Benefits,
 		})
 	}
@@ -89,6 +92,7 @@ func (c *PaymentController) CreatePayment(ctx *gin.Context) {
 		return
 	}
 
+	normalAmount, discountAmount := service.PaymentPriceBreakdownFromDiscounted(result.Payment.PriceAmountSnapshot)
 	ctx.JSON(http.StatusCreated, dto.CreatePaymentResponse{
 		PaymentID:      result.Payment.PaymentID,
 		TransactionID:  result.Payment.TransactionID,
@@ -96,6 +100,8 @@ func (c *PaymentController) CreatePayment(ctx *gin.Context) {
 		PackageName:    result.Payment.PackageNameSnapshot,
 		DurationMonths: result.Payment.DurationMonthsSnapshot,
 		TotalAmount:    result.Payment.PriceAmountSnapshot,
+		NormalAmount:   normalAmount,
+		DiscountAmount: discountAmount,
 		Benefits:       result.Payment.BenefitsSnapshot,
 		QrisImageURL:   result.Payment.QrisImageURL,
 		CreatedAt:      result.Payment.CreatedAt.Format(time.RFC3339),
@@ -129,6 +135,7 @@ func (c *PaymentController) GetMyPayment(ctx *gin.Context) {
 		return
 	}
 
+	normalAmount, discountAmount := service.PaymentPriceBreakdownFromDiscounted(result.Payment.PriceAmountSnapshot)
 	response := dto.PaymentDetailResponse{
 		PaymentID:       result.Payment.PaymentID,
 		TransactionID:   result.Payment.TransactionID,
@@ -136,6 +143,8 @@ func (c *PaymentController) GetMyPayment(ctx *gin.Context) {
 		PackageName:     result.Payment.PackageNameSnapshot,
 		DurationMonths:  result.Payment.DurationMonthsSnapshot,
 		TotalAmount:     result.Payment.PriceAmountSnapshot,
+		NormalAmount:    normalAmount,
+		DiscountAmount:  discountAmount,
 		Benefits:        result.Payment.BenefitsSnapshot,
 		QrisImageURL:    result.Payment.QrisImageURL,
 		ProofDocumentID: result.Payment.ProofDocumentID,
@@ -181,6 +190,7 @@ func (c *PaymentController) ListAdminPayments(ctx *gin.Context) {
 
 	items := make([]dto.AdminPaymentListItemResponse, 0, len(result.Items))
 	for _, row := range result.Items {
+		normalAmount, discountAmount := service.PaymentPriceBreakdownFromDiscounted(row.Amount)
 		items = append(items, dto.AdminPaymentListItemResponse{
 			PaymentID:        row.PaymentID,
 			TransactionID:    row.TransactionID,
@@ -188,6 +198,8 @@ func (c *PaymentController) ListAdminPayments(ctx *gin.Context) {
 			UserName:         row.UserName,
 			PackageName:      row.PackageName,
 			Amount:           row.Amount,
+			NormalAmount:     normalAmount,
+			DiscountAmount:   discountAmount,
 			Status:           string(row.Status),
 			TransactionDate:  row.TransactionAt.UTC().Format(time.RFC3339),
 			ProofDocumentID:  row.ProofDocumentID,

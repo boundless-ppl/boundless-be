@@ -7,6 +7,8 @@ type SubscriptionPackageResponse struct {
 	Description    string   `json:"description"`
 	DurationMonths int      `json:"duration_months"`
 	PriceAmount    int64    `json:"price_amount"`
+	NormalAmount   int64    `json:"normal_amount"`
+	DiscountAmount int64    `json:"discount_amount"`
 	Benefits       []string `json:"benefits"`
 }
 
@@ -26,6 +28,8 @@ type CreatePaymentResponse struct {
 	PackageName    string   `json:"package_name"`
 	DurationMonths int      `json:"duration_months"`
 	TotalAmount    int64    `json:"total_amount"`
+	NormalAmount   int64    `json:"normal_amount"`
+	DiscountAmount int64    `json:"discount_amount"`
 	Benefits       []string `json:"benefits"`
 
 	QrisImageURL string `json:"qris_image_url"`
@@ -41,6 +45,8 @@ type PaymentDetailResponse struct {
 	PackageName    string   `json:"package_name"`
 	DurationMonths int      `json:"duration_months"`
 	TotalAmount    int64    `json:"total_amount"`
+	NormalAmount   int64    `json:"normal_amount"`
+	DiscountAmount int64    `json:"discount_amount"`
 	Benefits       []string `json:"benefits"`
 
 	QrisImageURL    string  `json:"qris_image_url"`
@@ -60,8 +66,10 @@ type AdminPaymentListItemResponse struct {
 	UserID        string `json:"user_id"`
 	UserName      string `json:"user_name"`
 
-	PackageName string `json:"package_name"`
-	Amount      int64  `json:"amount"`
+	PackageName    string `json:"package_name"`
+	Amount         int64  `json:"amount"`
+	NormalAmount   int64  `json:"normal_amount"`
+	DiscountAmount int64  `json:"discount_amount"`
 
 	Status           string  `json:"status"`
 	TransactionDate  string  `json:"transaction_date"`
