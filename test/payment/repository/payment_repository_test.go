@@ -129,7 +129,7 @@ func TestFindPaymentByIDAndUserNotFoundRepository(t *testing.T) {
 	db := newFakeDB(t, &fakeBehavior{queryFn: func(query string, args []driver.NamedValue) (driver.Rows, error) {
 		return &fakeRows{columns: []string{
 			"payment_id", "transaction_id", "user_id", "subscription_id", "package_name_snapshot", "duration_months_snapshot",
-			"price_amount_snapshot", "benefits_snapshot_json", "payment_channel", "qris_image_url",
+			"price_amount_snapshot", "normal_price_snapshot", "discount_price_snapshot", "benefits_snapshot_json", "payment_channel", "qris_image_url",
 			"status", "admin_note", "proof_document_id", "verified_by", "verified_at", "paid_at", "expired_at", "created_at", "updated_at",
 		}, rows: [][]driver.Value{}}, nil
 	}})
@@ -170,7 +170,7 @@ func TestListActiveSubscriptionsRepository(t *testing.T) {
 		if !strings.Contains(query, "FROM subscriptions") {
 			t.Fatalf("unexpected query: %s", query)
 		}
-		return &fakeRows{columns: []string{"subscription_id", "package_key", "name", "description", "duration_months", "price_amount", "benefits_json", "is_active", "created_at", "updated_at"}, rows: [][]driver.Value{{"sub-1", "scholar", "The Scholar", "desc", int64(3), int64(100), []byte(`["a","b"]`), true, now, now}}}, nil
+		return &fakeRows{columns: []string{"subscription_id", "package_key", "name", "description", "duration_months", "price_amount", "benefits_json", "is_active", "created_at", "updated_at", "normal_price_amount", "discount_price_amount"}, rows: [][]driver.Value{{"sub-1", "scholar", "The Scholar", "desc", int64(3), int64(100), []byte(`["a","b"]`), true, now, now, int64(149000), int64(39000)}}}, nil
 	}})
 	repo := repository.NewPaymentRepository(db)
 
@@ -185,7 +185,7 @@ func TestListActiveSubscriptionsRepository(t *testing.T) {
 
 func TestFindActiveSubscriptionByIDNotFoundRepository(t *testing.T) {
 	db := newFakeDB(t, &fakeBehavior{queryFn: func(query string, args []driver.NamedValue) (driver.Rows, error) {
-		return &fakeRows{columns: []string{"subscription_id", "package_key", "name", "description", "duration_months", "price_amount", "benefits_json", "is_active", "created_at", "updated_at"}, rows: [][]driver.Value{}}, nil
+		return &fakeRows{columns: []string{"subscription_id", "package_key", "name", "description", "duration_months", "price_amount", "benefits_json", "is_active", "created_at", "updated_at", "normal_price_amount", "discount_price_amount"}, rows: [][]driver.Value{}}, nil
 	}})
 	repo := repository.NewPaymentRepository(db)
 
@@ -224,7 +224,7 @@ func TestCreateDocumentRepository(t *testing.T) {
 func TestFindPaymentByIDRepository(t *testing.T) {
 	now := time.Now().UTC()
 	db := newFakeDB(t, &fakeBehavior{queryFn: func(query string, args []driver.NamedValue) (driver.Rows, error) {
-		return &fakeRows{columns: []string{"payment_id", "transaction_id", "user_id", "subscription_id", "package_name_snapshot", "duration_months_snapshot", "price_amount_snapshot", "benefits_snapshot_json", "payment_channel", "qris_image_url", "status", "admin_note", "proof_document_id", "verified_by", "verified_at", "paid_at", "expired_at", "created_at", "updated_at"}, rows: [][]driver.Value{{"pay-1", "tx-1", "user-1", "sub-1", "The Scholar", int64(3), int64(100), []byte(`["a"]`), "qris_manual", "-", "pending", nil, nil, nil, nil, nil, now.Add(time.Hour), now, now}}}, nil
+		return &fakeRows{columns: []string{"payment_id", "transaction_id", "user_id", "subscription_id", "package_name_snapshot", "duration_months_snapshot", "price_amount_snapshot", "normal_price_snapshot", "discount_price_snapshot", "benefits_snapshot_json", "payment_channel", "qris_image_url", "status", "admin_note", "proof_document_id", "verified_by", "verified_at", "paid_at", "expired_at", "created_at", "updated_at"}, rows: [][]driver.Value{{"pay-1", "tx-1", "user-1", "sub-1", "The Scholar", int64(3), int64(100), int64(149000), int64(39000), []byte(`["a"]`), "qris_manual", "-", "pending", nil, nil, nil, nil, nil, now.Add(time.Hour), now, now}}}, nil
 	}})
 	repo := repository.NewPaymentRepository(db)
 
@@ -253,12 +253,42 @@ func TestFindPremiumCoverageEndAtRepository(t *testing.T) {
 	}
 }
 
+func TestFindCurrentPremiumSubscriptionRepositoryMergesContiguousRows(t *testing.T) {
+	start1 := time.Date(2026, time.March, 19, 13, 48, 14, 0, time.UTC)
+	start2 := start1.AddDate(0, 3, 0)
+	start3 := start2.AddDate(0, 3, 0)
+	ref := start1.AddDate(0, 1, 0)
+	end3 := start3.AddDate(0, 3, 0)
+	db := newFakeDB(t, &fakeBehavior{queryFn: func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		if !strings.Contains(query, "FROM user_subscriptions") {
+			return &fakeRows{columns: []string{"c"}, rows: [][]driver.Value{}}, nil
+		}
+		return &fakeRows{columns: []string{"user_subscription_id", "user_id", "subscription_id", "source_payment_id", "package_name_snapshot", "duration_months_snapshot", "price_amount_snapshot", "start_date", "end_date", "created_at"}, rows: [][]driver.Value{
+			{"us-1", "user-1", "sub-1", "pay-1", "The Scholar", int64(3), int64(100), start1, start2, start1},
+			{"us-2", "user-1", "sub-1", "pay-2", "The Scholar", int64(3), int64(100), start2, start3, start2},
+			{"us-3", "user-1", "sub-1", "pay-3", "The Scholar", int64(3), int64(100), start3, end3, start3},
+		}}, nil
+	}})
+	repo := repository.NewPaymentRepository(db)
+
+	out, err := repo.FindCurrentPremiumSubscription(context.Background(), "user-1", ref)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if !out.StartDate.Equal(start1) {
+		t.Fatalf("expected start %s, got %s", start1, out.StartDate)
+	}
+	if !out.EndDate.Equal(end3) {
+		t.Fatalf("expected end %s, got %s", end3, out.EndDate)
+	}
+}
+
 func TestListAdminPaymentsRepository(t *testing.T) {
 	now := time.Now().UTC()
 	db := newFakeDB(t, &fakeBehavior{queryFn: func(query string, args []driver.NamedValue) (driver.Rows, error) {
 		proofID := "doc-1"
 		proofURL := "http://local/doc-1"
-		return &fakeRows{columns: []string{"payment_id", "transaction_id", "user_id", "nama_lengkap", "package_name_snapshot", "price_amount_snapshot", "status", "created_at", "proof_document_id", "public_url"}, rows: [][]driver.Value{{"pay-1", "tx-1", "user-1", "Alice", "The Scholar", int64(100), "pending", now, proofID, proofURL}}}, nil
+		return &fakeRows{columns: []string{"payment_id", "transaction_id", "user_id", "nama_lengkap", "package_name_snapshot", "price_amount_snapshot", "normal_amount", "status", "created_at", "proof_document_id", "public_url"}, rows: [][]driver.Value{{"pay-1", "tx-1", "user-1", "Alice", "The Scholar", int64(100), int64(1000), "pending", now, proofID, proofURL}}}, nil
 	}})
 	repo := repository.NewPaymentRepository(db)
 
@@ -338,7 +368,7 @@ func TestMarkPaymentSuccessRepository(t *testing.T) {
 	db := newFakeDB(t, &fakeBehavior{
 		queryFn: func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			if strings.Contains(query, "FOR UPDATE") {
-				return &fakeRows{columns: []string{"payment_id", "transaction_id", "user_id", "subscription_id", "package_name_snapshot", "duration_months_snapshot", "price_amount_snapshot", "benefits_snapshot_json", "payment_channel", "qris_image_url", "status", "admin_note", "proof_document_id", "verified_by", "verified_at", "paid_at", "expired_at", "created_at", "updated_at"}, rows: [][]driver.Value{{"pay-1", "tx-1", "user-1", "sub-1", "The Scholar", int64(3), int64(100), []byte(`["a"]`), "qris_manual", "-", "pending", nil, nil, nil, nil, nil, now.Add(time.Hour), now, now}}}, nil
+				return &fakeRows{columns: []string{"payment_id", "transaction_id", "user_id", "subscription_id", "package_name_snapshot", "duration_months_snapshot", "price_amount_snapshot", "normal_price_snapshot", "discount_price_snapshot", "benefits_snapshot_json", "payment_channel", "qris_image_url", "status", "admin_note", "proof_document_id", "verified_by", "verified_at", "paid_at", "expired_at", "created_at", "updated_at"}, rows: [][]driver.Value{{"pay-1", "tx-1", "user-1", "sub-1", "The Scholar", int64(3), int64(100), int64(149000), int64(39000), []byte(`["a"]`), "qris_manual", "-", "pending", nil, nil, nil, nil, nil, now.Add(time.Hour), now, now}}}, nil
 			}
 			return &fakeRows{columns: []string{"c"}, rows: [][]driver.Value{}}, nil
 		},
@@ -364,7 +394,7 @@ func TestMarkPaymentSuccessRepository(t *testing.T) {
 func TestMarkPaymentFailedNotFoundRepository(t *testing.T) {
 	db := newFakeDB(t, &fakeBehavior{queryFn: func(query string, args []driver.NamedValue) (driver.Rows, error) {
 		if strings.Contains(query, "RETURNING") {
-			return &fakeRows{columns: []string{"payment_id", "transaction_id", "user_id", "subscription_id", "package_name_snapshot", "duration_months_snapshot", "price_amount_snapshot", "benefits_snapshot_json", "payment_channel", "qris_image_url", "status", "admin_note", "proof_document_id", "verified_by", "verified_at", "paid_at", "expired_at", "created_at", "updated_at"}, rows: [][]driver.Value{}}, nil
+			return &fakeRows{columns: []string{"payment_id", "transaction_id", "user_id", "subscription_id", "package_name_snapshot", "duration_months_snapshot", "price_amount_snapshot", "normal_price_snapshot", "discount_price_snapshot", "benefits_snapshot_json", "payment_channel", "qris_image_url", "status", "admin_note", "proof_document_id", "verified_by", "verified_at", "paid_at", "expired_at", "created_at", "updated_at"}, rows: [][]driver.Value{}}, nil
 		}
 		if strings.Contains(query, "SELECT status FROM payments") {
 			return &fakeRows{columns: []string{"status"}, rows: [][]driver.Value{}}, nil
@@ -382,7 +412,7 @@ func TestMarkPaymentFailedNotFoundRepository(t *testing.T) {
 func TestFindActiveSubscriptionByIDRepository(t *testing.T) {
 	now := time.Now().UTC()
 	db := newFakeDB(t, &fakeBehavior{queryFn: func(query string, args []driver.NamedValue) (driver.Rows, error) {
-		return &fakeRows{columns: []string{"subscription_id", "package_key", "name", "description", "duration_months", "price_amount", "benefits_json", "is_active", "created_at", "updated_at"}, rows: [][]driver.Value{{"sub-1", "scholar", "The Scholar", "desc", int64(3), int64(100), []byte(`["a"]`), true, now, now}}}, nil
+		return &fakeRows{columns: []string{"subscription_id", "package_key", "name", "description", "duration_months", "price_amount", "benefits_json", "is_active", "created_at", "updated_at", "normal_price_amount", "discount_price_amount"}, rows: [][]driver.Value{{"sub-1", "scholar", "The Scholar", "desc", int64(3), int64(100), []byte(`["a"]`), true, now, now, int64(149000), int64(39000)}}}, nil
 	}})
 	repo := repository.NewPaymentRepository(db)
 
@@ -397,7 +427,7 @@ func TestFindActiveSubscriptionByIDRepository(t *testing.T) {
 
 func TestFindPaymentByIDNotFoundRepository(t *testing.T) {
 	db := newFakeDB(t, &fakeBehavior{queryFn: func(query string, args []driver.NamedValue) (driver.Rows, error) {
-		return &fakeRows{columns: []string{"payment_id", "transaction_id", "user_id", "subscription_id", "package_name_snapshot", "duration_months_snapshot", "price_amount_snapshot", "benefits_snapshot_json", "payment_channel", "qris_image_url", "status", "admin_note", "proof_document_id", "verified_by", "verified_at", "paid_at", "expired_at", "created_at", "updated_at"}, rows: [][]driver.Value{}}, nil
+		return &fakeRows{columns: []string{"payment_id", "transaction_id", "user_id", "subscription_id", "package_name_snapshot", "duration_months_snapshot", "price_amount_snapshot", "normal_price_snapshot", "discount_price_snapshot", "benefits_snapshot_json", "payment_channel", "qris_image_url", "status", "admin_note", "proof_document_id", "verified_by", "verified_at", "paid_at", "expired_at", "created_at", "updated_at"}, rows: [][]driver.Value{}}, nil
 	}})
 	repo := repository.NewPaymentRepository(db)
 
@@ -446,7 +476,7 @@ func TestMarkPaymentSuccessNotPendingRepository(t *testing.T) {
 	now := time.Now().UTC()
 	db := newFakeDB(t, &fakeBehavior{queryFn: func(query string, args []driver.NamedValue) (driver.Rows, error) {
 		if strings.Contains(query, "FOR UPDATE") {
-			return &fakeRows{columns: []string{"payment_id", "transaction_id", "user_id", "subscription_id", "package_name_snapshot", "duration_months_snapshot", "price_amount_snapshot", "benefits_snapshot_json", "payment_channel", "qris_image_url", "status", "admin_note", "proof_document_id", "verified_by", "verified_at", "paid_at", "expired_at", "created_at", "updated_at"}, rows: [][]driver.Value{{"pay-1", "tx-1", "user-1", "sub-1", "The Scholar", int64(3), int64(100), []byte(`["a"]`), "qris_manual", "-", "success", nil, nil, nil, nil, nil, now.Add(time.Hour), now, now}}}, nil
+			return &fakeRows{columns: []string{"payment_id", "transaction_id", "user_id", "subscription_id", "package_name_snapshot", "duration_months_snapshot", "price_amount_snapshot", "normal_price_snapshot", "discount_price_snapshot", "benefits_snapshot_json", "payment_channel", "qris_image_url", "status", "admin_note", "proof_document_id", "verified_by", "verified_at", "paid_at", "expired_at", "created_at", "updated_at"}, rows: [][]driver.Value{{"pay-1", "tx-1", "user-1", "sub-1", "The Scholar", int64(3), int64(100), int64(149000), int64(39000), []byte(`["a"]`), "qris_manual", "-", "success", nil, nil, nil, nil, nil, now.Add(time.Hour), now, now}}}, nil
 		}
 		return &fakeRows{columns: []string{"c"}, rows: [][]driver.Value{}}, nil
 	}})
@@ -461,7 +491,7 @@ func TestMarkPaymentSuccessNotPendingRepository(t *testing.T) {
 func TestMarkPaymentFailedNotPendingRepository(t *testing.T) {
 	db := newFakeDB(t, &fakeBehavior{queryFn: func(query string, args []driver.NamedValue) (driver.Rows, error) {
 		if strings.Contains(query, "RETURNING") {
-			return &fakeRows{columns: []string{"payment_id", "transaction_id", "user_id", "subscription_id", "package_name_snapshot", "duration_months_snapshot", "price_amount_snapshot", "benefits_snapshot_json", "payment_channel", "qris_image_url", "status", "admin_note", "proof_document_id", "verified_by", "verified_at", "paid_at", "expired_at", "created_at", "updated_at"}, rows: [][]driver.Value{}}, nil
+			return &fakeRows{columns: []string{"payment_id", "transaction_id", "user_id", "subscription_id", "package_name_snapshot", "duration_months_snapshot", "price_amount_snapshot", "normal_price_snapshot", "discount_price_snapshot", "benefits_snapshot_json", "payment_channel", "qris_image_url", "status", "admin_note", "proof_document_id", "verified_by", "verified_at", "paid_at", "expired_at", "created_at", "updated_at"}, rows: [][]driver.Value{}}, nil
 		}
 		if strings.Contains(query, "SELECT status FROM payments") {
 			return &fakeRows{columns: []string{"status"}, rows: [][]driver.Value{{"success"}}}, nil

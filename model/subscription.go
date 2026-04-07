@@ -8,9 +8,11 @@ type Subscription struct {
 	Name           string
 	Description    string
 
-	DurationMonths int
-	PriceAmount    int64
-	Benefits       []string
+	DurationMonths      int
+	PriceAmount         int64
+	NormalPriceAmount   int64
+	DiscountPriceAmount int64
+	Benefits            []string
 
 	IsActive  bool
 	CreatedAt time.Time

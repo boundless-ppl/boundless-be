@@ -30,6 +30,7 @@ type AdminPaymentItem struct {
 	UserName         string
 	PackageName      string
 	Amount           int64
+	NormalAmount     int64
 	Status           model.PaymentStatus
 	TransactionAt    time.Time
 	ProofDocumentID  *string
@@ -72,6 +73,7 @@ type PaymentRepository interface {
 	FindPaymentByIDAndUser(ctx context.Context, paymentID, userID string) (model.Payment, error)
 	FindUserSubscriptionByPaymentID(ctx context.Context, paymentID, userID string) (model.UserSubscription, error)
 	FindPremiumCoverageEndAt(ctx context.Context, userID string, reference time.Time) (*time.Time, error)
+	FindCurrentPremiumSubscription(ctx context.Context, userID string, reference time.Time) (model.UserSubscription, error)
 	ListAdminPayments(ctx context.Context, params PaymentListParams) ([]AdminPaymentItem, error)
 	ListPendingPaymentNotifications(ctx context.Context, limit int) ([]PendingPaymentNotification, error)
 	AttachPaymentProofDocument(ctx context.Context, paymentID, userID, documentID string) error
@@ -91,7 +93,7 @@ func NewPaymentRepository(db *sql.DB) *DBPaymentRepository {
 func (r *DBPaymentRepository) ListActiveSubscriptions(ctx context.Context) ([]model.Subscription, error) {
 	query := `
 		SELECT subscription_id, package_key, name, description, duration_months, price_amount,
-		       benefits_json, is_active, created_at, updated_at
+		       benefits_json, is_active, created_at, updated_at, normal_price_amount, discount_price_amount
 		FROM subscriptions
 		WHERE is_active = TRUE
 		ORDER BY duration_months ASC
@@ -121,7 +123,7 @@ func (r *DBPaymentRepository) ListActiveSubscriptions(ctx context.Context) ([]mo
 func (r *DBPaymentRepository) FindActiveSubscriptionByID(ctx context.Context, subscriptionID string) (model.Subscription, error) {
 	query := `
 		SELECT subscription_id, package_key, name, description, duration_months, price_amount,
-		       benefits_json, is_active, created_at, updated_at
+		       benefits_json, is_active, created_at, updated_at, normal_price_amount, discount_price_amount
 		FROM subscriptions
 		WHERE subscription_id = $1 AND is_active = TRUE
 	`
@@ -147,10 +149,10 @@ func (r *DBPaymentRepository) CreatePayment(ctx context.Context, payment model.P
 	query := `
 		INSERT INTO payments (
 			payment_id, transaction_id, user_id, subscription_id, package_name_snapshot, duration_months_snapshot,
-			price_amount_snapshot, benefits_snapshot_json, payment_channel, qris_image_url,
+			price_amount_snapshot, normal_price_snapshot, discount_price_snapshot, benefits_snapshot_json, payment_channel, qris_image_url,
 			status, admin_notified_at, expired_at, created_at, updated_at
 		)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
 	`
 
 	_, err = r.db.ExecContext(
@@ -163,6 +165,8 @@ func (r *DBPaymentRepository) CreatePayment(ctx context.Context, payment model.P
 		payment.PackageNameSnapshot,
 		payment.DurationMonthsSnapshot,
 		payment.PriceAmountSnapshot,
+		payment.NormalPriceSnapshot,
+		payment.DiscountPriceSnapshot,
 		benefitsJSON,
 		payment.PaymentChannel,
 		payment.QrisImageURL,
@@ -208,7 +212,7 @@ func (r *DBPaymentRepository) CreateDocument(ctx context.Context, doc model.Docu
 func (r *DBPaymentRepository) FindPaymentByID(ctx context.Context, paymentID string) (model.Payment, error) {
 	query := `
 		SELECT payment_id, transaction_id, user_id, subscription_id, package_name_snapshot, duration_months_snapshot,
-		       price_amount_snapshot, benefits_snapshot_json, payment_channel, qris_image_url,
+		       price_amount_snapshot, normal_price_snapshot, discount_price_snapshot, benefits_snapshot_json, payment_channel, qris_image_url,
 		       status, admin_note, proof_document_id, verified_by, verified_at, paid_at, expired_at, created_at, updated_at
 		FROM payments
 		WHERE payment_id = $1
@@ -228,7 +232,7 @@ func (r *DBPaymentRepository) FindPaymentByID(ctx context.Context, paymentID str
 func (r *DBPaymentRepository) FindPaymentByIDAndUser(ctx context.Context, paymentID, userID string) (model.Payment, error) {
 	query := `
 		SELECT payment_id, transaction_id, user_id, subscription_id, package_name_snapshot, duration_months_snapshot,
-		       price_amount_snapshot, benefits_snapshot_json, payment_channel, qris_image_url,
+		       price_amount_snapshot, normal_price_snapshot, discount_price_snapshot, benefits_snapshot_json, payment_channel, qris_image_url,
 		       status, admin_note, proof_document_id, verified_by, verified_at, paid_at, expired_at, created_at, updated_at
 		FROM payments
 		WHERE payment_id = $1 AND user_id = $2
@@ -296,10 +300,96 @@ func (r *DBPaymentRepository) FindPremiumCoverageEndAt(ctx context.Context, user
 	return &value, nil
 }
 
+func (r *DBPaymentRepository) FindCurrentPremiumSubscription(ctx context.Context, userID string, reference time.Time) (model.UserSubscription, error) {
+	query := `
+		SELECT user_subscription_id, user_id, subscription_id, source_payment_id,
+		       package_name_snapshot, duration_months_snapshot, price_amount_snapshot,
+		       start_date, end_date, created_at
+		FROM user_subscriptions
+		WHERE user_id = $1
+		ORDER BY start_date ASC, end_date ASC
+	`
+
+	rows, err := r.db.QueryContext(ctx, query, userID)
+	if err != nil {
+		return model.UserSubscription{}, fmt.Errorf("find current premium subscription: %w", err)
+	}
+	defer rows.Close()
+
+	var (
+		window    model.UserSubscription
+		hasWindow bool
+		current   model.UserSubscription
+		prevEnd   time.Time
+	)
+
+	for rows.Next() {
+		var sub model.UserSubscription
+		if err := rows.Scan(
+			&sub.UserSubscriptionID,
+			&sub.UserID,
+			&sub.SubscriptionID,
+			&sub.SourcePaymentID,
+			&sub.PackageNameSnapshot,
+			&sub.DurationMonthsSnapshot,
+			&sub.PriceAmountSnapshot,
+			&sub.StartDate,
+			&sub.EndDate,
+			&sub.CreatedAt,
+		); err != nil {
+			return model.UserSubscription{}, fmt.Errorf("scan premium subscription: %w", err)
+		}
+
+		sub.StartDate = sub.StartDate.UTC()
+		sub.EndDate = sub.EndDate.UTC()
+
+		if !hasWindow {
+			current = sub
+			prevEnd = sub.EndDate
+			hasWindow = true
+			continue
+		}
+
+		if !sub.StartDate.After(prevEnd) {
+			if sub.EndDate.After(prevEnd) {
+				current.EndDate = sub.EndDate
+				prevEnd = sub.EndDate
+			}
+			continue
+		}
+
+		if !reference.Before(current.StartDate) && !reference.After(current.EndDate) {
+			window = current
+			break
+		}
+
+		current = sub
+		prevEnd = sub.EndDate
+	}
+
+	if err := rows.Err(); err != nil {
+		return model.UserSubscription{}, fmt.Errorf("iterate premium subscriptions: %w", err)
+	}
+
+	if hasWindow && window.UserSubscriptionID == "" {
+		if !reference.Before(current.StartDate) && !reference.After(current.EndDate) {
+			window = current
+		}
+	}
+
+	if window.UserSubscriptionID == "" {
+		return model.UserSubscription{}, errs.ErrPremiumSubscriptionNotFound
+	}
+
+	return window, nil
+}
+
 func (r *DBPaymentRepository) ListAdminPayments(ctx context.Context, params PaymentListParams) ([]AdminPaymentItem, error) {
 	query := `
 		SELECT p.payment_id, p.transaction_id, p.user_id, u.nama_lengkap,
-		       p.package_name_snapshot, p.price_amount_snapshot, p.status, p.created_at,
+		       p.package_name_snapshot, p.price_amount_snapshot,
+		       COALESCE(p.normal_price_snapshot, p.price_amount_snapshot * 10, p.price_amount_snapshot) AS normal_amount,
+		       p.status, p.created_at,
 		       p.proof_document_id, d.public_url
 		FROM payments p
 		JOIN users u ON u.user_id = p.user_id
@@ -333,6 +423,7 @@ func (r *DBPaymentRepository) ListAdminPayments(ctx context.Context, params Paym
 			&item.UserName,
 			&item.PackageName,
 			&item.Amount,
+			&item.NormalAmount,
 			&item.Status,
 			&item.TransactionAt,
 			&proofDocumentID,
@@ -465,7 +556,7 @@ func (r *DBPaymentRepository) MarkPaymentSuccess(ctx context.Context, params Mar
 	payment, err := r.scanPayment(
 		tx.QueryRowContext(ctx, `
 			SELECT payment_id, transaction_id, user_id, subscription_id, package_name_snapshot, duration_months_snapshot,
-			       price_amount_snapshot, benefits_snapshot_json, payment_channel, qris_image_url,
+			       price_amount_snapshot, normal_price_snapshot, discount_price_snapshot, benefits_snapshot_json, payment_channel, qris_image_url,
 			       status, admin_note, proof_document_id, verified_by, verified_at, paid_at, expired_at, created_at, updated_at
 			FROM payments
 			WHERE payment_id = $1
@@ -571,7 +662,7 @@ func (r *DBPaymentRepository) MarkPaymentFailed(ctx context.Context, params Mark
 		WHERE payment_id = $1
 		  AND status = $8
 		RETURNING payment_id, transaction_id, user_id, subscription_id, package_name_snapshot, duration_months_snapshot,
-		          price_amount_snapshot, benefits_snapshot_json, payment_channel, qris_image_url,
+		          price_amount_snapshot, normal_price_snapshot, discount_price_snapshot, benefits_snapshot_json, payment_channel, qris_image_url,
 		          status, admin_note, proof_document_id, verified_by, verified_at, paid_at, expired_at, created_at, updated_at
 	`
 	now := time.Now().UTC()
@@ -616,6 +707,8 @@ func (r *DBPaymentRepository) scanPayment(row scanner) (model.Payment, error) {
 	var verifiedBy sql.NullString
 	var verifiedAt sql.NullTime
 	var paidAt sql.NullTime
+	var normalPriceSnapshot sql.NullInt64
+	var discountPriceSnapshot sql.NullInt64
 
 	err := row.Scan(
 		&payment.PaymentID,
@@ -625,6 +718,8 @@ func (r *DBPaymentRepository) scanPayment(row scanner) (model.Payment, error) {
 		&payment.PackageNameSnapshot,
 		&payment.DurationMonthsSnapshot,
 		&payment.PriceAmountSnapshot,
+		&normalPriceSnapshot,
+		&discountPriceSnapshot,
 		&benefitsJSON,
 		&payment.PaymentChannel,
 		&payment.QrisImageURL,
@@ -662,6 +757,12 @@ func (r *DBPaymentRepository) scanPayment(row scanner) (model.Payment, error) {
 	if paidAt.Valid {
 		payment.PaidAt = &paidAt.Time
 	}
+	if normalPriceSnapshot.Valid {
+		payment.NormalPriceSnapshot = &normalPriceSnapshot.Int64
+	}
+	if discountPriceSnapshot.Valid {
+		payment.DiscountPriceSnapshot = &discountPriceSnapshot.Int64
+	}
 
 	return payment, nil
 }
@@ -680,6 +781,8 @@ func scanSubscription(row scanner) (model.Subscription, error) {
 		&sub.IsActive,
 		&sub.CreatedAt,
 		&sub.UpdatedAt,
+		&sub.NormalPriceAmount,
+		&sub.DiscountPriceAmount,
 	)
 	if err != nil {
 		return model.Subscription{}, err

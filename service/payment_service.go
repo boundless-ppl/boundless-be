@@ -19,7 +19,6 @@ import (
 
 const (
 	defaultPaymentChannel = "qris_manual"
-	paymentDiscountPct    = int64(90)
 )
 
 type PaymentService struct {
@@ -70,10 +69,6 @@ func (s *PaymentService) ListPackages(ctx context.Context) ([]model.Subscription
 		return nil, err
 	}
 
-	for i := range packages {
-		packages[i].PriceAmount = applyPaymentDiscount(packages[i].PriceAmount)
-	}
-
 	return packages, nil
 }
 
@@ -89,7 +84,6 @@ func (s *PaymentService) CreatePayment(ctx context.Context, userID, subscription
 
 	now := time.Now().UTC()
 	expiredAt := now.Add(24 * time.Hour)
-	_, discountedAmount := PaymentPriceBreakdownFromOriginal(subscription.PriceAmount)
 	payment := model.Payment{
 		PaymentID:              uuid.NewString(),
 		TransactionID:          generateTransactionID(now),
@@ -97,7 +91,9 @@ func (s *PaymentService) CreatePayment(ctx context.Context, userID, subscription
 		SubscriptionID:         subscription.SubscriptionID,
 		PackageNameSnapshot:    subscription.Name,
 		DurationMonthsSnapshot: subscription.DurationMonths,
-		PriceAmountSnapshot:    discountedAmount,
+		PriceAmountSnapshot:    subscription.DiscountPriceAmount,
+		NormalPriceSnapshot:    &subscription.NormalPriceAmount,
+		DiscountPriceSnapshot:  &subscription.DiscountPriceAmount,
 		BenefitsSnapshot:       cloneBenefits(subscription.Benefits),
 		PaymentChannel:         defaultPaymentChannel,
 		QrisImageURL:           strings.TrimSpace(os.Getenv("PAYMENT_QRIS_IMAGE_URL")),
@@ -333,6 +329,11 @@ func parseOptionalStatus(value string) (model.PaymentStatus, error) {
 
 func parseRequiredStatus(value string) (model.PaymentStatus, error) {
 	trimmed := strings.TrimSpace(strings.ToLower(value))
+	switch trimmed {
+	case "reject", "rejected":
+		trimmed = string(model.PaymentStatusFailed)
+	}
+
 	switch model.PaymentStatus(trimmed) {
 	case model.PaymentStatusPending, model.PaymentStatusSuccess, model.PaymentStatusFailed:
 		return model.PaymentStatus(trimmed), nil
@@ -377,38 +378,4 @@ func cloneBenefits(in []string) []string {
 	out := make([]string, len(in))
 	copy(out, in)
 	return out
-}
-
-func applyPaymentDiscount(amount int64) int64 {
-	if amount <= 0 {
-		return 0
-	}
-	discount := amount * paymentDiscountPct / 100
-	finalAmount := amount - discount
-	if finalAmount < 0 {
-		return 0
-	}
-	return finalAmount
-}
-
-func PaymentPriceBreakdownFromOriginal(originalAmount int64) (int64, int64) {
-	if originalAmount <= 0 {
-		return 0, 0
-	}
-	return originalAmount, applyPaymentDiscount(originalAmount)
-}
-
-func PaymentPriceBreakdownFromDiscounted(discountedAmount int64) (int64, int64) {
-	if discountedAmount <= 0 {
-		return 0, 0
-	}
-	payablePct := int64(100) - paymentDiscountPct
-	if payablePct <= 0 {
-		return 0, discountedAmount
-	}
-	originalAmount := discountedAmount * 100 / payablePct
-	if originalAmount < discountedAmount {
-		originalAmount = discountedAmount
-	}
-	return originalAmount, discountedAmount
 }

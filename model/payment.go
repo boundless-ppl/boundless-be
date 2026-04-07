@@ -19,6 +19,8 @@ type Payment struct {
 	PackageNameSnapshot    string
 	DurationMonthsSnapshot int
 	PriceAmountSnapshot    int64
+	NormalPriceSnapshot    *int64
+	DiscountPriceSnapshot  *int64
 	BenefitsSnapshot       []string
 
 	PaymentChannel string
