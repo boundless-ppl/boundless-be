@@ -11,9 +11,10 @@ import (
 )
 
 type Dependencies struct {
-	UserRepo repository.UserRepository
-	UnivRepo repository.UniversityRepository
-	RecRepo  repository.RecommendationRepository
+	UserRepo    repository.UserRepository
+	UnivRepo    repository.UniversityRepository
+	RecRepo     repository.RecommendationRepository
+	PaymentRepo repository.PaymentRepository
 }
 
 func NewHandler(dep Dependencies) *gin.Engine {
@@ -41,6 +42,10 @@ func NewHandler(dep Dependencies) *gin.Engine {
 
 	if dep.RecRepo != nil && dep.UserRepo != nil {
 		registerRecommendationRoutes(router, dep.RecRepo, dep.UserRepo)
+	}
+
+	if dep.PaymentRepo != nil && dep.UserRepo != nil {
+		registerPaymentRoutes(router, dep.PaymentRepo, dep.UserRepo)
 	}
 
 	return router
