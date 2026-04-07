@@ -116,6 +116,16 @@ func (f *fakePaymentRepo) FindPremiumCoverageEndAt(ctx context.Context, userID s
 	return f.premiumCoverageEnd, nil
 }
 
+func (f *fakePaymentRepo) FindCurrentPremiumSubscription(ctx context.Context, userID string, reference time.Time) (model.UserSubscription, error) {
+	if f.userSubByPayment.UserSubscriptionID != "" {
+		return f.userSubByPayment, nil
+	}
+	if f.userSubByPaymentErr != nil {
+		return model.UserSubscription{}, f.userSubByPaymentErr
+	}
+	return model.UserSubscription{}, errs.ErrPremiumSubscriptionNotFound
+}
+
 func (f *fakePaymentRepo) ListAdminPayments(ctx context.Context, params repository.PaymentListParams) ([]repository.AdminPaymentItem, error) {
 	f.listAdminParams = params
 	if f.listAdminErr != nil {
@@ -357,11 +367,13 @@ func TestCreatePaymentUsesSubscriptionSnapshotAndDefaultQris(t *testing.T) {
 	t.Setenv("PAYMENT_QRIS_IMAGE_URL", "")
 	repo := &fakePaymentRepo{
 		activeSubByID: model.Subscription{
-			SubscriptionID: "sub-1",
-			Name:           "The Scholar",
-			DurationMonths: 6,
-			PriceAmount:    499000,
-			Benefits:       []string{"A", "B"},
+			SubscriptionID:      "sub-1",
+			Name:                "The Scholar",
+			DurationMonths:      6,
+			PriceAmount:         499000,
+			NormalPriceAmount:   499000,
+			DiscountPriceAmount: 109000,
+			Benefits:            []string{"A", "B"},
 		},
 	}
 
@@ -382,21 +394,23 @@ func TestCreatePaymentUsesSubscriptionSnapshotAndDefaultQris(t *testing.T) {
 	if repo.createPaymentInput.ExpiredAt == nil {
 		t.Fatal("expected expired at to be set")
 	}
-	if repo.createPaymentInput.PriceAmountSnapshot != 49900 {
-		t.Fatalf("expected discounted price snapshot 49900, got %d", repo.createPaymentInput.PriceAmountSnapshot)
+	if repo.createPaymentInput.PriceAmountSnapshot != 109000 {
+		t.Fatalf("expected discounted price snapshot 109000, got %d", repo.createPaymentInput.PriceAmountSnapshot)
 	}
 	if len(repo.createPaymentInput.BenefitsSnapshot) != 2 {
 		t.Fatalf("expected benefits copied, got %+v", repo.createPaymentInput.BenefitsSnapshot)
 	}
 }
 
-func TestListPackagesUsesDiscountedPrice(t *testing.T) {
+func TestListPackagesReturnsFixedPricingFromRepository(t *testing.T) {
 	repo := &fakePaymentRepo{
 		activeSubscriptions: []model.Subscription{{
-			SubscriptionID: "sub-1",
-			Name:           "The Scholar",
-			DurationMonths: 3,
-			PriceAmount:    299000,
+			SubscriptionID:      "sub-1",
+			Name:                "The Scholar",
+			DurationMonths:      3,
+			PriceAmount:         299000,
+			NormalPriceAmount:   399000,
+			DiscountPriceAmount: 109000,
 		}},
 	}
 	svc := service.NewPaymentServiceWithDeps(repo, &fakeDocumentStorage{})
@@ -408,8 +422,11 @@ func TestListPackagesUsesDiscountedPrice(t *testing.T) {
 	if len(out) != 1 {
 		t.Fatalf("expected 1 package, got %d", len(out))
 	}
-	if out[0].PriceAmount != 29900 {
-		t.Fatalf("expected discounted price 29900, got %d", out[0].PriceAmount)
+	if out[0].PriceAmount != 299000 {
+		t.Fatalf("expected original price 299000 to remain unchanged in service output, got %d", out[0].PriceAmount)
+	}
+	if out[0].DiscountPriceAmount != 109000 {
+		t.Fatalf("expected fixed discount price 109000, got %d", out[0].DiscountPriceAmount)
 	}
 }
 
@@ -495,6 +512,27 @@ func TestUpdatePaymentStatusFailedTrimsOptionalValues(t *testing.T) {
 	}
 	if repo.markFailedParams.ProofDocumentID != nil {
 		t.Fatalf("expected empty proof id to become nil, got %+v", repo.markFailedParams.ProofDocumentID)
+	}
+}
+
+func TestUpdatePaymentStatusRejectAliasMapsToFailed(t *testing.T) {
+	repo := &fakePaymentRepo{}
+	svc := service.NewPaymentServiceWithDeps(repo, &fakeDocumentStorage{})
+
+	_, err := svc.UpdatePaymentStatus(
+		context.Background(),
+		"admin-1",
+		"pay-1",
+		"reject",
+		nil,
+		nil,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if repo.markFailedParams.PaymentID != "pay-1" {
+		t.Fatalf("expected mark failed to be called with payment id pay-1, got %s", repo.markFailedParams.PaymentID)
 	}
 }
 

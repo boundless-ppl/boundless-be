@@ -34,7 +34,7 @@ func NewHandler(dep Dependencies) *gin.Engine {
 		ctx.String(200, "hi\n")
 	})
 
-	registerAuthRoutes(router, dep.UserRepo)
+	registerAuthRoutes(router, dep.UserRepo, dep.PaymentRepo)
 
 	if dep.UnivRepo != nil {
 		registerUnivRoutes(router, dep.UnivRepo)

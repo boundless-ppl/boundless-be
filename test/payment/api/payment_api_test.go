@@ -114,6 +114,9 @@ func (r *testPaymentRepo) FindUserSubscriptionByPaymentID(ctx context.Context, p
 func (r *testPaymentRepo) FindPremiumCoverageEndAt(ctx context.Context, userID string, reference time.Time) (*time.Time, error) {
 	return nil, nil
 }
+func (r *testPaymentRepo) FindCurrentPremiumSubscription(ctx context.Context, userID string, reference time.Time) (model.UserSubscription, error) {
+	return model.UserSubscription{}, errs.ErrPremiumSubscriptionNotFound
+}
 func (r *testPaymentRepo) ListAdminPayments(ctx context.Context, params repository.PaymentListParams) ([]repository.AdminPaymentItem, error) {
 	return []repository.AdminPaymentItem{}, nil
 }
