@@ -192,9 +192,9 @@ func TestFindDreamTrackerDetailRepository(t *testing.T) {
 				}, nil
 			case strings.Contains(query, "FROM dream_requirement_status drs"):
 				return &fakeDreamRows{
-					columns: []string{"dream_req_status_id", "dream_tracker_id", "document_id", "req_catalog_id", "status", "notes", "ai_status", "ai_messages", "created_at", "key", "label", "kategori", "deskripsi"},
+					columns: []string{"dream_req_status_id", "dream_tracker_id", "document_id", "req_catalog_id", "status", "notes", "ai_status", "ai_messages", "created_at", "key", "label", "kategori", "deskripsi", "is_required", "original_filename", "public_url", "mime_type", "size_bytes", "document_type", "uploaded_at"},
 					rows: [][]driver.Value{{
-						"req-status-1", "tracker-1", "doc-1", "req-1", string(model.DreamRequirementStatusUploaded), "looks good", "COMPLETED", "[\"ok\"]", now, "transcript", "Transcript", "DOCUMENT", "Academic transcript",
+						"req-status-1", "tracker-1", "doc-1", "req-1", string(model.DreamRequirementStatusUploaded), "looks good", "COMPLETED", "[\"ok\"]", now, "transcript", "Transcript", "DOCUMENT", "Academic transcript", true, "transcript.pdf", "https://example.com/transcript.pdf", "application/pdf", int64(12345), "transcript", now,
 					}},
 				}, nil
 			case strings.Contains(query, "FROM dream_key_milestones"):
@@ -230,6 +230,9 @@ func TestFindDreamTrackerDetailRepository(t *testing.T) {
 	}
 	if detail.Requirements[0].RequirementLabel != "Transcript" {
 		t.Fatalf("unexpected requirement detail: %+v", detail.Requirements[0])
+	}
+	if !detail.Requirements[0].IsRequired {
+		t.Fatalf("expected requirement to be required: %+v", detail.Requirements[0])
 	}
 	if len(detail.Milestones) != 1 || detail.Milestones[0].Title != "Registrasi Dibuka" {
 		t.Fatalf("unexpected milestones: %+v", detail.Milestones)

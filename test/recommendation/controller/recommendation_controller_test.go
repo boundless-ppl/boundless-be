@@ -38,6 +38,8 @@ type fakeRecommendationService struct {
 	cvErr            error
 	detailOutput     repository.SubmissionDetail
 	detailErr        error
+	previewOutput    []dto.RecommendationAllowedCandidateInput
+	previewErr       error
 }
 
 func (f *fakeRecommendationService) UploadDocument(ctx context.Context, input service.UploadDocumentInput) (service.UploadDocumentOutput, error) {
@@ -101,6 +103,10 @@ func (f *fakeRecommendationService) CreateCVRecommendation(ctx context.Context, 
 
 func (f *fakeRecommendationService) GetSubmissionDetail(ctx context.Context, userID, submissionID string) (repository.SubmissionDetail, error) {
 	return f.detailOutput, f.detailErr
+}
+
+func (f *fakeRecommendationService) PreviewAllowedCandidates(ctx context.Context, userID string, preferences dto.RecommendationPreferenceInput) ([]dto.RecommendationAllowedCandidateInput, error) {
+	return f.previewOutput, f.previewErr
 }
 
 func setupRecommendationRouter(svc *fakeRecommendationService) *gin.Engine {

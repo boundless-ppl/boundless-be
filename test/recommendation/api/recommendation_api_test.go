@@ -88,6 +88,15 @@ func (f *fakeRecRepo) FindSubmissionDetail(ctx context.Context, submissionID, us
 	return f.detail, nil
 }
 
+func (f *fakeRecRepo) ListRecommendationCandidates(ctx context.Context, preferences []model.RecommendationPreference) ([]repository.RecommendationCandidate, error) {
+	return []repository.RecommendationCandidate{{
+		ProgramID:      "program-1",
+		ProgramName:    "Computer Science",
+		UniversityName: "University A",
+		Country:        "Japan",
+	}}, nil
+}
+
 func setupHandler(t *testing.T, recRepo repository.RecommendationRepository) http.Handler {
 	t.Helper()
 	t.Setenv("AUTH_SECRET", "test-secret")

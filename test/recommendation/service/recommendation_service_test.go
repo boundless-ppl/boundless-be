@@ -30,6 +30,7 @@ type fakeRecommendationRepo struct {
 	createdResultRows      []model.RecommendationResult
 
 	detail repository.SubmissionDetail
+	candidates []repository.RecommendationCandidate
 }
 
 func (f *fakeRecommendationRepo) CreateDocument(ctx context.Context, doc model.Document) (model.Document, error) {
@@ -71,6 +72,18 @@ func (f *fakeRecommendationRepo) CreateResultSet(ctx context.Context, submission
 
 func (f *fakeRecommendationRepo) FindSubmissionDetail(ctx context.Context, submissionID, userID string) (repository.SubmissionDetail, error) {
 	return f.detail, nil
+}
+
+func (f *fakeRecommendationRepo) ListRecommendationCandidates(ctx context.Context, preferences []model.RecommendationPreference) ([]repository.RecommendationCandidate, error) {
+	if len(f.candidates) > 0 {
+		return f.candidates, nil
+	}
+	return []repository.RecommendationCandidate{{
+		ProgramID:      "program-1",
+		ProgramName:    "Computer Science",
+		UniversityName: "University A",
+		Country:        "Japan",
+	}}, nil
 }
 
 func makeFileHeader(t *testing.T, fieldName, filename string, content []byte) *multipart.FileHeader {

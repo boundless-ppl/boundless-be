@@ -330,9 +330,9 @@ func TestFindSubmissionDetailRepositorySuccess(t *testing.T) {
 				}, nil
 			case strings.Contains(query, "FROM recommendation_results"):
 				return &fakeRecRows{
-					columns: []string{"rec_result_id", "result_set_id", "rank_no", "university_name", "program_name", "country", "fit_score", "fit_level", "overview", "why_this_university", "why_this_program", "reason_summary", "pros_json", "cons_json", "created_at"},
+					columns: []string{"rec_result_id", "result_set_id", "program_id", "rank_no", "university_name", "program_name", "country", "fit_score", "fit_level", "overview", "why_this_university", "why_this_program", "reason_summary", "pros_json", "cons_json", "created_at"},
 					rows: [][]driver.Value{
-						{"res-1", "set-1", int64(1), "University A", "CS", "Japan", int64(90), "high", "overview", "why uni", "why program", "summary", `["pro"]`, `["con"]`, now},
+						{"res-1", "set-1", "program-1", int64(1), "University A", "CS", "Japan", int64(90), "high", "overview", "why uni", "why program", "summary", `["pro"]`, `["con"]`, now},
 					},
 				}, nil
 			default:
