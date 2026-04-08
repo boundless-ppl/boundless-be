@@ -22,5 +22,6 @@ func registerRecommendationRoutes(router *gin.Engine, recRepo repository.Recomme
 	recommendationGroup.POST("/profile", ctrl.CreateProfileRecommendation)
 	recommendationGroup.POST("/transcript", ctrl.CreateTranscriptRecommendation)
 	recommendationGroup.POST("/cv", ctrl.CreateCVRecommendation)
+	recommendationGroup.GET("/allowed-candidates", ctrl.PreviewAllowedCandidates)
 	recommendationGroup.GET("/submissions/:id", ctrl.GetSubmissionDetail)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"net/url"
 	"time"
 
 	// Register the pgx driver with database/sql so sql.Open("pgx", ...) works.
@@ -24,6 +25,8 @@ func NewConnectionWithOpen(
 		return nil, ErrMissingDatabaseURL
 	}
 
+	databaseURL = withSimpleProtocol(databaseURL)
+
 	db, err := open("pgx", databaseURL)
 	if err != nil {
 		return nil, err
@@ -42,4 +45,18 @@ func NewConnectionWithOpen(
 	}
 
 	return db, nil
+}
+
+func withSimpleProtocol(databaseURL string) string {
+	parsed, err := url.Parse(databaseURL)
+	if err != nil {
+		return databaseURL
+	}
+
+	query := parsed.Query()
+	if query.Get("default_query_exec_mode") == "" {
+		query.Set("default_query_exec_mode", "simple_protocol")
+	}
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
 }

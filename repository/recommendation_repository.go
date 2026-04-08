@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"boundless-be/errs"
@@ -24,6 +25,19 @@ type SubmissionDetail struct {
 	Results         []model.RecommendationResult
 }
 
+type RecommendationCandidate struct {
+	ProgramID             string
+	ProgramName           string
+	UniversityName        string
+	Country               string
+	DegreeLevel           string
+	Language              string
+	FundingSummary        string
+	AdmissionDeadline     string
+	OfficialProgramURL    string
+	OfficialUniversityURL string
+}
+
 type RecommendationRepository interface {
 	CreateDocument(ctx context.Context, doc model.Document) (model.Document, error)
 	FindDocumentByIDAndUser(ctx context.Context, documentID, userID string) (model.Document, error)
@@ -31,6 +45,7 @@ type RecommendationRepository interface {
 	UpdateSubmissionStatus(ctx context.Context, submissionID, userID string, status model.RecommendationStatus) error
 	CreateResultSet(ctx context.Context, submissionID string, generatedAt time.Time, results []model.RecommendationResult) (model.RecommendationResultSet, error)
 	FindSubmissionDetail(ctx context.Context, submissionID, userID string) (SubmissionDetail, error)
+	ListRecommendationCandidates(ctx context.Context, preferences []model.RecommendationPreference) ([]RecommendationCandidate, error)
 }
 
 type DBRecommendationRepository struct {
@@ -216,9 +231,9 @@ func (r *DBRecommendationRepository) CreateResultSet(ctx context.Context, submis
 
 	insertResultQuery := `
 		INSERT INTO recommendation_results
-		(rec_result_id, result_set_id, rank_no, university_name, program_name, country, fit_score, fit_level, overview,
+		(rec_result_id, result_set_id, program_id, rank_no, university_name, program_name, country, fit_score, fit_level, overview,
 		 why_this_university, why_this_program, reason_summary, pros_json, cons_json, created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
 	`
 	for _, row := range results {
 		_, err := tx.ExecContext(
@@ -226,6 +241,7 @@ func (r *DBRecommendationRepository) CreateResultSet(ctx context.Context, submis
 			insertResultQuery,
 			row.RecResultID,
 			row.ResultSetID,
+			nullEmptyString(row.ProgramID),
 			row.RankNo,
 			row.UniversityName,
 			row.ProgramName,
@@ -440,7 +456,7 @@ func (r *DBRecommendationRepository) findLatestResultSet(ctx context.Context, su
 
 func (r *DBRecommendationRepository) findResultsByResultSetID(ctx context.Context, resultSetID string) ([]model.RecommendationResult, error) {
 	resultsQuery := `
-		SELECT rec_result_id, result_set_id, rank_no, university_name, program_name, country, fit_score, fit_level,
+		SELECT rec_result_id, result_set_id, program_id, rank_no, university_name, program_name, country, fit_score, fit_level,
 		       overview, why_this_university, why_this_program, reason_summary, pros_json, cons_json, created_at
 		FROM recommendation_results
 		WHERE result_set_id = $1
@@ -458,6 +474,7 @@ func (r *DBRecommendationRepository) findResultsByResultSetID(ctx context.Contex
 		if err := rows.Scan(
 			&row.RecResultID,
 			&row.ResultSetID,
+			&row.ProgramID,
 			&row.RankNo,
 			&row.UniversityName,
 			&row.ProgramName,
@@ -480,4 +497,210 @@ func (r *DBRecommendationRepository) findResultsByResultSetID(ctx context.Contex
 		return nil, fmt.Errorf("iterate recommendation results: %w", err)
 	}
 	return results, nil
+}
+
+func (r *DBRecommendationRepository) ListRecommendationCandidates(ctx context.Context, preferences []model.RecommendationPreference) ([]RecommendationCandidate, error) {
+	continents := make([]string, 0)
+	countries := make([]string, 0)
+	fields := make([]string, 0)
+	languages := make([]string, 0)
+	startPeriods := make([]string, 0)
+	scholarshipTypes := make([]string, 0)
+	degreeLevel := ""
+	for _, pref := range preferences {
+		switch strings.ToLower(strings.TrimSpace(pref.PreferenceKey)) {
+		case "continents", "continent":
+			if value := strings.TrimSpace(pref.PreferenceValue); value != "" {
+				continents = append(continents, value)
+			}
+		case "countries", "country":
+			if value := strings.TrimSpace(pref.PreferenceValue); value != "" {
+				countries = append(countries, value)
+			}
+		case "fields_of_study", "field_of_study", "field":
+			if value := strings.TrimSpace(pref.PreferenceValue); value != "" {
+				fields = append(fields, value)
+			}
+		case "degree_level":
+			if value := strings.TrimSpace(pref.PreferenceValue); value != "" && degreeLevel == "" {
+				degreeLevel = normalizeRecommendationDegreeLevel(value)
+			}
+		case "languages", "language":
+			if value := strings.TrimSpace(pref.PreferenceValue); value != "" {
+				languages = append(languages, value)
+			}
+		case "start_periods", "start_period":
+			if value := strings.TrimSpace(pref.PreferenceValue); value != "" {
+				startPeriods = append(startPeriods, value)
+			}
+		case "scholarship_types", "scholarship_type":
+			if value := strings.TrimSpace(pref.PreferenceValue); value != "" {
+				scholarshipTypes = append(scholarshipTypes, value)
+			}
+		}
+	}
+
+	query := `
+		SELECT
+			p.program_id,
+			p.nama AS program_name,
+			u.nama AS university_name,
+			COALESCE(c.nama, u.negara_id) AS country,
+			p.jenjang AS degree_level,
+			p.bahasa AS language,
+			COALESCE(
+				string_agg(DISTINCT fo.nama_beasiswa, ' || ' ORDER BY fo.nama_beasiswa)
+				FILTER (WHERE COALESCE(fo.nama_beasiswa, '') <> ''),
+				''
+			) AS funding_summary,
+			COALESCE(TO_CHAR(MIN(ap.deadline), 'YYYY-MM-DD'), '') AS admission_deadline,
+			COALESCE(p.program_url, '') AS official_program_url,
+			COALESCE(u.website, '') AS official_university_url
+		FROM programs p
+		JOIN universities u ON u.id = p.university_id
+		LEFT JOIN countries c ON c.negara_id = u.negara_id
+		LEFT JOIN admission_paths ap ON ap.program_id = p.program_id
+		LEFT JOIN admission_funding af ON af.admission_id = ap.admission_id
+		LEFT JOIN funding_options fo ON fo.funding_id = af.funding_id
+		WHERE 1=1
+	`
+	args := make([]any, 0)
+	index := 1
+	if len(continents) > 0 {
+		query += ` AND (`
+		for i, continent := range continents {
+			if i > 0 {
+				query += ` OR `
+			}
+			query += `COALESCE(c.benua, '') ILIKE $` + fmt.Sprint(index)
+			args = append(args, continent)
+			index++
+		}
+		query += `)`
+	}
+	if len(countries) > 0 {
+		query += ` AND (`
+		for i, country := range countries {
+			if i > 0 {
+				query += ` OR `
+			}
+			query += `(COALESCE(c.nama, '') ILIKE $` + fmt.Sprint(index) + ` OR COALESCE(u.negara_id, '') ILIKE $` + fmt.Sprint(index) + `)`
+			args = append(args, country)
+			index++
+		}
+		query += `)`
+	}
+	if len(fields) > 0 {
+		query += ` AND (` 
+		for i, field := range fields {
+			if i > 0 {
+				query += ` OR `
+			}
+			query += `p.nama ILIKE $` + fmt.Sprint(index)
+			args = append(args, "%"+field+"%")
+			index++
+		}
+		query += `)`
+	}
+	if degreeLevel != "" {
+		query += ` AND p.jenjang ILIKE $` + fmt.Sprint(index)
+		args = append(args, degreeLevel)
+		index++
+	}
+	if len(languages) > 0 {
+		query += ` AND (`
+		for i, language := range languages {
+			if i > 0 {
+				query += ` OR `
+			}
+			query += `p.bahasa ILIKE $` + fmt.Sprint(index)
+			args = append(args, "%"+language+"%")
+			index++
+		}
+		query += `)`
+	}
+	if len(startPeriods) > 0 {
+		query += ` AND (`
+		for i, period := range startPeriods {
+			if i > 0 {
+				query += ` OR `
+			}
+			query += `COALESCE(ap.intake, '') ILIKE $` + fmt.Sprint(index)
+			args = append(args, "%"+period+"%")
+			index++
+		}
+		query += `)`
+	}
+	if len(scholarshipTypes) > 0 {
+		query += ` AND (`
+		for i, scholarshipType := range scholarshipTypes {
+			if i > 0 {
+				query += ` OR `
+			}
+			query += `COALESCE(fo.tipe_pembiayaan, '') ILIKE $` + fmt.Sprint(index)
+			args = append(args, scholarshipType)
+			index++
+		}
+		query += `)`
+	}
+	query += `
+		GROUP BY
+			p.program_id, p.nama, u.nama, c.nama, p.jenjang, p.bahasa, p.program_url, u.website, u.ranking, u.negara_id
+		ORDER BY
+			COALESCE(u.ranking, 2147483647) ASC,
+			u.nama ASC,
+			p.nama ASC
+		LIMIT 30
+	`
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list recommendation candidates: %w", err)
+	}
+	defer rows.Close()
+
+	result := make([]RecommendationCandidate, 0)
+	for rows.Next() {
+		var item RecommendationCandidate
+		if err := rows.Scan(
+			&item.ProgramID,
+			&item.ProgramName,
+			&item.UniversityName,
+			&item.Country,
+			&item.DegreeLevel,
+			&item.Language,
+			&item.FundingSummary,
+			&item.AdmissionDeadline,
+			&item.OfficialProgramURL,
+			&item.OfficialUniversityURL,
+		); err != nil {
+			return nil, fmt.Errorf("scan recommendation candidate: %w", err)
+		}
+		result = append(result, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate recommendation candidates: %w", err)
+	}
+	return result, nil
+}
+
+func normalizeRecommendationDegreeLevel(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	switch normalized {
+	case "master", "masters", "s2", "postgraduate", "graduate":
+		return "S2"
+	case "phd", "doctorate", "doctoral", "doctor", "s3":
+		return "S3"
+	case "bachelor", "bachelors", "undergraduate", "s1":
+		return "S1"
+	default:
+		return value
+	}
+}
+
+func nullEmptyString(value string) any {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return value
 }

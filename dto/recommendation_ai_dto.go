@@ -6,16 +6,19 @@ type AIProfileRecommendationRequest struct {
 	TranscriptFile *multipart.FileHeader
 	CVFile         *multipart.FileHeader
 	Preferences    RecommendationPreferenceInput
+	AllowedCandidates []RecommendationAllowedCandidateInput
 }
 
 type AITranscriptRecommendationRequest struct {
 	TranscriptFile *multipart.FileHeader
 	Preferences    RecommendationPreferenceInput
+	AllowedCandidates []RecommendationAllowedCandidateInput
 }
 
 type AICVRecommendationRequest struct {
 	CVFile      *multipart.FileHeader
 	Preferences RecommendationPreferenceInput
+	AllowedCandidates []RecommendationAllowedCandidateInput
 }
 
 type GlobalMatchAIStudentProfileSummaryResponse struct {
@@ -49,6 +52,7 @@ type GlobalMatchAIApplicationStrategyResponse struct {
 
 type GlobalMatchAITopRecommendationResponse struct {
 	Rank                       int                                              `json:"rank"`
+	ProgramID                  string                                           `json:"program_id,omitempty"`
 	UniversityName             string                                           `json:"university_name"`
 	ProgramName                string                                           `json:"program_name"`
 	Country                    string                                           `json:"country"`

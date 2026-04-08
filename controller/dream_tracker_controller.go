@@ -2,15 +2,16 @@ package controller
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
 	"boundless-be/dto"
 	"boundless-be/errs"
 	"boundless-be/middleware"
 	"boundless-be/model"
+	"boundless-be/presenter"
 	"boundless-be/repository"
 	"boundless-be/service"
 
@@ -27,17 +28,25 @@ const (
 
 type DreamTrackerService interface {
 	CreateDreamTracker(ctx context.Context, input service.CreateDreamTrackerInput) (service.CreateDreamTrackerOutput, error)
+	ListDreamTrackers(ctx context.Context, userID string) ([]repository.DreamTrackerDetail, error)
+	GetGroupedDreamTrackers(ctx context.Context, userID string, selectedDreamTrackerID *string, includeDefaultDetail bool) (service.GroupedDreamTrackersOutput, error)
+	GetDreamTrackerDashboardSummary(ctx context.Context, userID string) (service.DreamTrackerDashboardSummary, error)
 	GetDreamTrackerDetail(ctx context.Context, userID, dreamTrackerID string) (repository.DreamTrackerDetail, error)
 	GetDocumentDetail(ctx context.Context, userID, documentID string) (model.Document, error)
+	UploadDreamRequirementDocument(ctx context.Context, input service.UploadDreamRequirementDocumentInput) (service.UploadDreamRequirementDocumentOutput, int, error)
 	SubmitDreamRequirement(ctx context.Context, input service.SubmitDreamRequirementInput) (service.SubmitDreamRequirementOutput, error)
 }
 
 type DreamTrackerController struct {
 	dreamTrackerService DreamTrackerService
+	presenter           presenter.DreamTrackerPresenter
 }
 
 func NewDreamTrackerController(dreamTrackerService DreamTrackerService) *DreamTrackerController {
-	return &DreamTrackerController{dreamTrackerService: dreamTrackerService}
+	return &DreamTrackerController{
+		dreamTrackerService: dreamTrackerService,
+		presenter:           presenter.NewDreamTrackerPresenter(),
+	}
 }
 
 func (c *DreamTrackerController) CreateDreamTracker(ctx *gin.Context) {
@@ -74,6 +83,71 @@ func (c *DreamTrackerController) CreateDreamTracker(ctx *gin.Context) {
 	})
 }
 
+func (c *DreamTrackerController) ListDreamTrackers(ctx *gin.Context) {
+	userID, ok := c.requireUserID(ctx)
+	if !ok {
+		return
+	}
+
+	items, err := c.dreamTrackerService.ListDreamTrackers(ctx.Request.Context(), userID)
+	if err != nil {
+		c.writeGetDreamTrackerError(ctx, err)
+		return
+	}
+
+	ctx.JSON(http.StatusOK, c.presenter.PresentTrackers(items))
+}
+
+func (c *DreamTrackerController) GetDreamTrackerDashboardSummary(ctx *gin.Context) {
+	userID, ok := c.requireUserID(ctx)
+	if !ok {
+		return
+	}
+
+	summary, err := c.dreamTrackerService.GetDreamTrackerDashboardSummary(ctx.Request.Context(), userID)
+	if err != nil {
+		c.writeGetDreamTrackerError(ctx, err)
+		return
+	}
+
+	ctx.JSON(http.StatusOK, dto.DreamTrackerDashboardSummaryResponse{
+		TotalApplications: summary.TotalTrackers,
+		IncompleteCount:   summary.IncompleteTrackers,
+		CompletedCount:    summary.CompletedTrackers,
+		DeadlineNearCount: summary.NearDeadlineTrackers,
+	})
+}
+
+func (c *DreamTrackerController) GetGroupedDreamTrackers(ctx *gin.Context) {
+	userID, ok := c.requireUserID(ctx)
+	if !ok {
+		return
+	}
+
+	includeDefaultDetail, err := parseOptionalBool(ctx.Query("include_default_detail"))
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: dreamTrackerInvalidInputMessage})
+		return
+	}
+
+	var selectedID *string
+	if value := ctx.Query("selected_dream_tracker_id"); value != "" {
+		if _, err := uuid.Parse(value); err != nil {
+			ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: dreamTrackerInvalidIDFormatMessage})
+			return
+		}
+		selectedID = &value
+	}
+
+	grouped, err := c.dreamTrackerService.GetGroupedDreamTrackers(ctx.Request.Context(), userID, selectedID, includeDefaultDetail)
+	if err != nil {
+		c.writeGetDreamTrackerError(ctx, err)
+		return
+	}
+
+	ctx.JSON(http.StatusOK, c.presentGroupedDreamTrackers(grouped))
+}
+
 func (c *DreamTrackerController) GetDreamTrackerDetail(ctx *gin.Context) {
 	userID, ok := c.requireUserID(ctx)
 	if !ok {
@@ -92,25 +166,7 @@ func (c *DreamTrackerController) GetDreamTrackerDetail(ctx *gin.Context) {
 		return
 	}
 
-	ctx.JSON(http.StatusOK, dto.DreamTrackerResponse{
-		DreamTrackerID:    detail.DreamTracker.DreamTrackerID,
-		UserID:            detail.DreamTracker.UserID,
-		ProgramID:         detail.DreamTracker.ProgramID,
-		AdmissionID:       detail.DreamTracker.AdmissionID,
-		FundingID:         detail.DreamTracker.FundingID,
-		Title:             detail.DreamTracker.Title,
-		Status:            string(detail.DreamTracker.Status),
-		CreatedAt:         detail.DreamTracker.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt:         detail.DreamTracker.UpdatedAt.UTC().Format(time.RFC3339),
-		SourceType:        detail.DreamTracker.SourceType,
-		ReqSubmissionID:   detail.DreamTracker.ReqSubmissionID,
-		SourceRecResultID: detail.DreamTracker.SourceRecResultID,
-		Summary:           toDreamTrackerSummaryResponse(detail.Summary),
-		Program:           toDreamTrackerProgramInfoResponse(detail.ProgramInfo),
-		Requirements:      toDreamRequirementStatusResponses(detail.Requirements),
-		Milestones:        toDreamTrackerMilestoneResponses(detail.Milestones),
-		Fundings:          toDreamTrackerFundingResponses(detail.Fundings),
-	})
+	ctx.JSON(http.StatusOK, c.presenter.PresentTracker(detail))
 }
 
 func (c *DreamTrackerController) GetDocumentDetail(ctx *gin.Context) {
@@ -146,6 +202,44 @@ func (c *DreamTrackerController) GetDocumentDetail(ctx *gin.Context) {
 	})
 }
 
+func (c *DreamTrackerController) UploadDreamRequirementDocument(ctx *gin.Context) {
+	userID, ok := c.requireUserID(ctx)
+	if !ok {
+		return
+	}
+
+	requirementID := ctx.Param("id")
+	if _, err := uuid.Parse(requirementID); err != nil {
+		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: dreamTrackerInvalidIDFormatMessage})
+		return
+	}
+
+	reuseIfExists := true
+	if raw := ctx.PostForm("reuse_if_exists"); raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: dreamTrackerInvalidInputMessage})
+			return
+		}
+		reuseIfExists = parsed
+	}
+
+	file, _ := ctx.FormFile("file")
+	output, statusCode, err := c.dreamTrackerService.UploadDreamRequirementDocument(ctx.Request.Context(), service.UploadDreamRequirementDocumentInput{
+		UserID:           userID,
+		DreamReqStatusID: requirementID,
+		DocumentType:     ctx.PostForm("document_type"),
+		ReuseIfExists:    reuseIfExists,
+		File:             file,
+	})
+	if err != nil {
+		c.writeUploadDreamRequirementDocumentError(ctx, err)
+		return
+	}
+
+	ctx.JSON(statusCode, c.presenter.PresentUploadRequirementDocument(output))
+}
+
 func (c *DreamTrackerController) SubmitDreamRequirement(ctx *gin.Context) {
 	userID, ok := c.requireUserID(ctx)
 	if !ok {
@@ -174,13 +268,7 @@ func (c *DreamTrackerController) SubmitDreamRequirement(ctx *gin.Context) {
 		return
 	}
 
-	ctx.JSON(http.StatusOK, dto.SubmitDreamRequirementResponse{
-		DreamReqStatusID: output.Requirement.DreamReqStatusID,
-		DocumentID:       output.Requirement.DocumentID,
-		Status:           string(output.Requirement.Status),
-		AIStatus:         output.Requirement.AIStatus,
-		AIMessages:       output.AIMessages,
-	})
+	ctx.JSON(http.StatusOK, c.presenter.PresentSubmitRequirement(output))
 }
 
 func (c *DreamTrackerController) requireUserID(ctx *gin.Context) (string, bool) {
@@ -244,99 +332,19 @@ func (c *DreamTrackerController) writeSubmitDreamRequirementError(ctx *gin.Conte
 	}
 }
 
-func toDreamRequirementStatusResponses(items []model.DreamRequirementDetail) []dto.DreamRequirementStatusResponse {
-	requirements := make([]dto.DreamRequirementStatusResponse, 0, len(items))
-	for _, item := range items {
-		requirements = append(requirements, dto.DreamRequirementStatusResponse{
-			DreamReqStatusID: item.DreamReqStatusID,
-			DocumentID:       item.DocumentID,
-			ReqCatalogID:     item.ReqCatalogID,
-			RequirementKey:   item.RequirementKey,
-			RequirementLabel: item.RequirementLabel,
-			Category:         item.RequirementCategory,
-			Description:      item.RequirementDescription,
-			Status:           string(item.Status),
-			Notes:            item.Notes,
-			AIStatus:         item.AIStatus,
-			AIMessages:       decodeAIMessages(item.AIMessages),
-			ActionLabel:      item.ActionLabel,
-			CanUpload:        item.CanUpload,
-			NeedsReupload:    item.NeedsReupload,
-			CreatedAt:        item.CreatedAt.UTC().Format(time.RFC3339),
-		})
+func (c *DreamTrackerController) writeUploadDreamRequirementDocumentError(ctx *gin.Context, err error) {
+	switch {
+	case errors.Is(err, errs.ErrUnauthorized):
+		ctx.JSON(http.StatusUnauthorized, dto.ErrorResponse{Error: dreamTrackerAuthFailedMessage})
+	case errors.Is(err, errs.ErrInvalidInput):
+		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: dreamTrackerInvalidInputMessage})
+	case errors.Is(err, errs.ErrDocumentNotFound):
+		ctx.JSON(http.StatusNotFound, dto.ErrorResponse{Error: "document not found"})
+	case errors.Is(err, errs.ErrDreamRequirementNotFound):
+		ctx.JSON(http.StatusNotFound, dto.ErrorResponse{Error: "dream requirement not found"})
+	default:
+		ctx.JSON(http.StatusInternalServerError, dto.ErrorResponse{Error: dreamTrackerInternalServerErrorMessage})
 	}
-	return requirements
-}
-
-func toDreamTrackerSummaryResponse(summary model.DreamTrackerSummary) dto.DreamTrackerSummaryResponse {
-	var nextDeadlineAt *string
-	if summary.NextDeadlineAt != nil {
-		value := summary.NextDeadlineAt.UTC().Format(time.RFC3339)
-		nextDeadlineAt = &value
-	}
-	return dto.DreamTrackerSummaryResponse{
-		CompletionPercentage:  summary.CompletionPercentage,
-		CompletedRequirements: summary.CompletedRequirements,
-		TotalRequirements:     summary.TotalRequirements,
-		NextDeadlineAt:        nextDeadlineAt,
-		IsDeadlineNear:        summary.IsDeadlineNear,
-		IsOverdue:             summary.IsOverdue,
-	}
-}
-
-func toDreamTrackerProgramInfoResponse(info model.DreamTrackerProgramInfo) dto.DreamTrackerProgramInfoResponse {
-	var admissionDeadline *string
-	if info.AdmissionDeadline != nil {
-		value := info.AdmissionDeadline.UTC().Format(time.RFC3339)
-		admissionDeadline = &value
-	}
-	return dto.DreamTrackerProgramInfoResponse{
-		ProgramID:         info.ProgramID,
-		ProgramName:       info.ProgramName,
-		UniversityName:    info.UniversityName,
-		AdmissionName:     info.AdmissionName,
-		Intake:            info.Intake,
-		AdmissionURL:      info.AdmissionURL,
-		AdmissionDeadline: admissionDeadline,
-	}
-}
-
-func toDreamTrackerMilestoneResponses(items []model.DreamKeyMilestone) []dto.DreamTrackerMilestoneResponse {
-	milestones := make([]dto.DreamTrackerMilestoneResponse, 0, len(items))
-	for _, item := range items {
-		var deadlineDate *string
-		if item.DeadlineDate != nil {
-			value := item.DeadlineDate.UTC().Format(time.RFC3339)
-			deadlineDate = &value
-		}
-		milestones = append(milestones, dto.DreamTrackerMilestoneResponse{
-			DreamMilestoneID: item.DreamMilestoneID,
-			Title:            item.Title,
-			Description:      item.Description,
-			DeadlineDate:     deadlineDate,
-			IsRequired:       item.IsRequired,
-			Status:           string(item.Status),
-			CreatedAt:        item.CreatedAt.UTC().Format(time.RFC3339),
-			UpdatedAt:        item.UpdatedAt.UTC().Format(time.RFC3339),
-		})
-	}
-	return milestones
-}
-
-func toDreamTrackerFundingResponses(items []model.DreamTrackerFundingOption) []dto.DreamTrackerFundingResponse {
-	fundings := make([]dto.DreamTrackerFundingResponse, 0, len(items))
-	for _, item := range items {
-		fundings = append(fundings, dto.DreamTrackerFundingResponse{
-			FundingID:      item.FundingID,
-			NamaBeasiswa:   item.NamaBeasiswa,
-			Deskripsi:      item.Deskripsi,
-			Provider:       item.Provider,
-			TipePembiayaan: string(item.TipePembiayaan),
-			Website:        item.Website,
-			Status:         string(item.Status),
-		})
-	}
-	return fundings
 }
 
 func isValidUUID(value string) bool {
@@ -344,15 +352,64 @@ func isValidUUID(value string) bool {
 	return err == nil
 }
 
-func decodeAIMessages(raw *string) []string {
-	if raw == nil || *raw == "" {
-		return []string{}
+func parseOptionalBool(value string) (bool, error) {
+	if value == "" {
+		return false, nil
 	}
+	return strconv.ParseBool(value)
+}
 
-	var messages []string
-	if err := json.Unmarshal([]byte(*raw), &messages); err == nil {
-		return messages
+func (c *DreamTrackerController) presentGroupedDreamTrackers(output service.GroupedDreamTrackersOutput) dto.DreamTrackerGroupedResponse {
+	response := dto.DreamTrackerGroupedResponse{
+		DefaultSelectedDreamTrackerID: output.DefaultSelectedDreamTrackerID,
+		Universities:                  make([]dto.DreamTrackerUniversityGroupResponse, 0, len(output.Universities)),
+		Fundings:                      make([]dto.DreamTrackerFundingGroupResponse, 0, len(output.Fundings)),
 	}
-
-	return []string{*raw}
+	for _, group := range output.Universities {
+		items := make([]dto.DreamTrackerGroupItemResponse, 0, len(group.Items))
+		for _, item := range group.Items {
+			items = append(items, dto.DreamTrackerGroupItemResponse{
+				DreamTrackerID:       item.DreamTrackerID,
+				Title:                item.Title,
+				ProgramName:          item.ProgramName,
+				AdmissionName:        item.AdmissionName,
+				UniversityName:       item.UniversityName,
+				Status:               string(item.Status),
+				StatusLabel:          item.StatusLabel,
+				CompletionPercentage: item.CompletionPercentage,
+				IsSelected:           item.IsSelected,
+			})
+		}
+		response.Universities = append(response.Universities, dto.DreamTrackerUniversityGroupResponse{
+			UniversityID:   group.UniversityID,
+			UniversityName: group.UniversityName,
+			Items:          items,
+		})
+	}
+	for _, group := range output.Fundings {
+		items := make([]dto.DreamTrackerGroupItemResponse, 0, len(group.Items))
+		for _, item := range group.Items {
+			items = append(items, dto.DreamTrackerGroupItemResponse{
+				DreamTrackerID:       item.DreamTrackerID,
+				Title:                item.Title,
+				ProgramName:          item.ProgramName,
+				AdmissionName:        item.AdmissionName,
+				UniversityName:       item.UniversityName,
+				Status:               string(item.Status),
+				StatusLabel:          item.StatusLabel,
+				CompletionPercentage: item.CompletionPercentage,
+				IsSelected:           item.IsSelected,
+			})
+		}
+		response.Fundings = append(response.Fundings, dto.DreamTrackerFundingGroupResponse{
+			FundingID:   group.FundingID,
+			FundingName: group.FundingName,
+			Items:       items,
+		})
+	}
+	if output.DefaultDetail != nil {
+		presented := c.presenter.PresentTracker(*output.DefaultDetail)
+		response.DefaultDetail = &presented
+	}
+	return response
 }

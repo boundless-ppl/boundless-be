@@ -14,6 +14,20 @@ type RecommendationPreferenceInput struct {
 	AdditionalPreference string   `form:"additional_preference" json:"additional_preference"`
 }
 
+type RecommendationAllowedCandidateInput struct {
+	ProgramID            string   `json:"program_id"`
+	ProgramName          string   `json:"program_name"`
+	UniversityName       string   `json:"university_name"`
+	Country              string   `json:"country"`
+	DegreeLevel          string   `json:"degree_level,omitempty"`
+	Language             string   `json:"language,omitempty"`
+	FocusTags            []string `json:"focus_tags,omitempty"`
+	FundingSummary       []string `json:"funding_summary,omitempty"`
+	AdmissionDeadline    string   `json:"admission_deadline,omitempty"`
+	OfficialProgramURL   string   `json:"official_program_url,omitempty"`
+	OfficialUniversityURL string  `json:"official_university_url,omitempty"`
+}
+
 type CreateProfileRecommendationRequest struct {
 	TranscriptFile *multipart.FileHeader `form:"transcript_file" binding:"required"`
 	CVFile         *multipart.FileHeader `form:"cv_file" binding:"required"`

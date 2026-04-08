@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"time"
 
@@ -31,6 +32,7 @@ type RecommendationService interface {
 	CreateTranscriptRecommendation(ctx context.Context, userID string, req dto.CreateTranscriptRecommendationRequest) (service.CreateRecommendationWorkflowOutput, error)
 	CreateCVRecommendation(ctx context.Context, userID string, req dto.CreateCVRecommendationRequest) (service.CreateRecommendationWorkflowOutput, error)
 	GetSubmissionDetail(ctx context.Context, userID, submissionID string) (repository.SubmissionDetail, error)
+	PreviewAllowedCandidates(ctx context.Context, userID string, preferences dto.RecommendationPreferenceInput) ([]dto.RecommendationAllowedCandidateInput, error)
 }
 
 type RecommendationController struct {
@@ -142,9 +144,11 @@ func (c *RecommendationController) CreateProfileRecommendation(ctx *gin.Context)
 		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: recommendationInvalidInputMessage})
 		return
 	}
+	log.Printf("recommendation_controller_request mode=profile user_id=%s transcript=%t cv=%t", userID.(string), req.TranscriptFile != nil, req.CVFile != nil)
 
 	output, err := c.recommendationService.CreateProfileRecommendation(ctx.Request.Context(), userID.(string), req)
 	if err != nil {
+		log.Printf("recommendation_controller_error mode=profile user_id=%s err=%v", userID.(string), err)
 		c.writeRecommendationWorkflowError(ctx, err)
 		return
 	}
@@ -169,9 +173,15 @@ func (c *RecommendationController) CreateTranscriptRecommendation(ctx *gin.Conte
 		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: recommendationInvalidInputMessage})
 		return
 	}
+	filename := ""
+	if req.TranscriptFile != nil {
+		filename = req.TranscriptFile.Filename
+	}
+	log.Printf("recommendation_controller_request mode=transcript user_id=%s transcript=%t filename=%s", userID.(string), req.TranscriptFile != nil, filename)
 
 	output, err := c.recommendationService.CreateTranscriptRecommendation(ctx.Request.Context(), userID.(string), req)
 	if err != nil {
+		log.Printf("recommendation_controller_error mode=transcript user_id=%s err=%v", userID.(string), err)
 		c.writeRecommendationWorkflowError(ctx, err)
 		return
 	}
@@ -196,9 +206,15 @@ func (c *RecommendationController) CreateCVRecommendation(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: recommendationInvalidInputMessage})
 		return
 	}
+	filename := ""
+	if req.CVFile != nil {
+		filename = req.CVFile.Filename
+	}
+	log.Printf("recommendation_controller_request mode=cv user_id=%s cv=%t filename=%s", userID.(string), req.CVFile != nil, filename)
 
 	output, err := c.recommendationService.CreateCVRecommendation(ctx.Request.Context(), userID.(string), req)
 	if err != nil {
+		log.Printf("recommendation_controller_error mode=cv user_id=%s err=%v", userID.(string), err)
 		c.writeRecommendationWorkflowError(ctx, err)
 		return
 	}
@@ -245,6 +261,35 @@ func (c *RecommendationController) GetSubmissionDetail(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, response)
 }
 
+func (c *RecommendationController) PreviewAllowedCandidates(ctx *gin.Context) {
+	userID, ok := ctx.Get(middleware.UserIDContextKey)
+	if !ok {
+		ctx.JSON(http.StatusUnauthorized, dto.ErrorResponse{Error: recommendationAuthFailedMessage})
+		return
+	}
+
+	var req dto.RecommendationPreferenceInput
+	if err := ctx.ShouldBindQuery(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: recommendationInvalidInputMessage})
+		return
+	}
+
+	items, err := c.recommendationService.PreviewAllowedCandidates(ctx.Request.Context(), userID.(string), req)
+	if err != nil {
+		switch {
+		case errors.Is(err, errs.ErrUnauthorized):
+			ctx.JSON(http.StatusUnauthorized, dto.ErrorResponse{Error: recommendationAuthFailedMessage})
+		case errors.Is(err, errs.ErrInvalidInput):
+			ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: recommendationInvalidInputMessage})
+		default:
+			ctx.JSON(http.StatusInternalServerError, dto.ErrorResponse{Error: recommendationInternalServerErrorMessage})
+		}
+		return
+	}
+
+	ctx.JSON(http.StatusOK, dto.RecommendationAllowedCandidateListResponse{Items: items})
+}
+
 func (c *RecommendationController) writeGetSubmissionDetailError(ctx *gin.Context, err error) {
 	switch {
 	case errors.Is(err, errs.ErrUnauthorized):
@@ -263,7 +308,11 @@ func (c *RecommendationController) writeRecommendationWorkflowError(ctx *gin.Con
 	case errors.Is(err, errs.ErrInvalidInput), errors.Is(err, errs.ErrNoDocumentProvided):
 		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: recommendationInvalidInputMessage})
 	case errors.Is(err, errs.ErrExternalService):
-		ctx.JSON(http.StatusBadGateway, dto.ErrorResponse{Error: "external service error"})
+		message := errs.ErrExternalService.Error()
+		if err.Error() != message {
+			message = err.Error()
+		}
+		ctx.JSON(http.StatusBadGateway, dto.ErrorResponse{Error: message})
 	default:
 		ctx.JSON(http.StatusInternalServerError, dto.ErrorResponse{Error: recommendationInternalServerErrorMessage})
 	}
@@ -285,6 +334,7 @@ func toRecommendationDocumentResponses(items []model.Document) []dto.Recommendat
 	return responses
 }
 
+
 func toRecommendationPreferenceResponses(items []model.RecommendationPreference) []dto.RecommendationPreferenceResponse {
 	responses := make([]dto.RecommendationPreferenceResponse, 0, len(items))
 	for _, pref := range items {
@@ -304,6 +354,8 @@ func toRecommendationResultSetResponse(set *model.RecommendationResultSet, rows 
 	resultResponses := make([]dto.RecommendationResultResponse, 0, len(rows))
 	for _, row := range rows {
 		resultResponses = append(resultResponses, dto.RecommendationResultResponse{
+			RecResultID:        row.RecResultID,
+			ProgramID:          row.ProgramID,
 			RankNo:            row.RankNo,
 			UniversityName:    row.UniversityName,
 			ProgramName:       row.ProgramName,

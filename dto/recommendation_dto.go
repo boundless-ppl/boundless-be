@@ -54,6 +54,8 @@ type RecommendationPreferenceResponse struct {
 }
 
 type RecommendationResultResponse struct {
+	RecResultID        string   `json:"source_rec_result_id,omitempty"`
+	ProgramID          string   `json:"program_id,omitempty"`
 	RankNo            int      `json:"rank_no"`
 	UniversityName    string   `json:"university_name"`
 	ProgramName       string   `json:"program_name"`
@@ -83,4 +85,8 @@ type RecommendationSubmissionDetailResponse struct {
 	Documents    []RecommendationDocumentResponse   `json:"documents"`
 	Preferences  []RecommendationPreferenceResponse `json:"preferences"`
 	LatestResult *RecommendationResultSetResponse   `json:"latest_result,omitempty"`
+}
+
+type RecommendationAllowedCandidateListResponse struct {
+	Items []RecommendationAllowedCandidateInput `json:"items"`
 }

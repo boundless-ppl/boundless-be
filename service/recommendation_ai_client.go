@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,10 +35,16 @@ type HTTPRecommendationAIClient struct {
 }
 
 func NewHTTPRecommendationAIClient(baseURL string) *HTTPRecommendationAIClient {
+	timeout := 180 * time.Second
+	if raw := strings.TrimSpace(os.Getenv("AI_SERVICE_TIMEOUT_SECONDS")); raw != "" {
+		if seconds, err := strconv.Atoi(raw); err == nil && seconds > 0 {
+			timeout = time.Duration(seconds) * time.Second
+		}
+	}
 	return &HTTPRecommendationAIClient{
 		baseURL: strings.TrimSuffix(baseURL, "/"),
 		httpClient: &http.Client{
-			Timeout: 60 * time.Second,
+			Timeout: timeout,
 		},
 	}
 }
@@ -49,6 +58,7 @@ func (c *HTTPRecommendationAIClient) RecommendProfile(ctx context.Context, req d
 			{FieldName: "cv_file", Header: req.CVFile},
 		},
 		req.Preferences,
+		req.AllowedCandidates,
 	)
 }
 
@@ -60,6 +70,7 @@ func (c *HTTPRecommendationAIClient) RecommendTranscript(ctx context.Context, re
 			{FieldName: "file", Header: req.TranscriptFile},
 		},
 		req.Preferences,
+		req.AllowedCandidates,
 	)
 }
 
@@ -71,6 +82,7 @@ func (c *HTTPRecommendationAIClient) RecommendCV(ctx context.Context, req dto.AI
 			{FieldName: "file", Header: req.CVFile},
 		},
 		req.Preferences,
+		req.AllowedCandidates,
 	)
 }
 
@@ -84,11 +96,13 @@ func (c *HTTPRecommendationAIClient) doMultipartRecommendation(
 	path string,
 	files []multipartFilePart,
 	preferences dto.RecommendationPreferenceInput,
+	allowedCandidates []dto.RecommendationAllowedCandidateInput,
 ) (dto.GlobalMatchAIRecommendationResponse, error) {
-	requestBody, contentType, err := buildRecommendationMultipartBody(files, preferences)
+	requestBody, contentType, err := buildRecommendationMultipartBody(files, preferences, allowedCandidates)
 	if err != nil {
 		return dto.GlobalMatchAIRecommendationResponse{}, err
 	}
+	log.Printf("recommendation_ai_client_request path=%s base_url=%s body_bytes=%d files=%d allowed_candidates=%d", path, c.baseURL, len(requestBody), len(files), len(allowedCandidates))
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(requestBody))
 	if err != nil {
@@ -98,19 +112,24 @@ func (c *HTTPRecommendationAIClient) doMultipartRecommendation(
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
+		log.Printf("recommendation_ai_client_transport_error path=%s err=%v", path, err)
 		return dto.GlobalMatchAIRecommendationResponse{}, fmt.Errorf("call AI recommendation service: %w", err)
 	}
 	defer resp.Body.Close()
+	log.Printf("recommendation_ai_client_response path=%s status=%d", path, resp.StatusCode)
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		log.Printf("recommendation_ai_client_error_body path=%s status=%d body=%s", path, resp.StatusCode, strings.TrimSpace(string(body)))
 		return dto.GlobalMatchAIRecommendationResponse{}, fmt.Errorf("AI recommendation service status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	var payload dto.GlobalMatchAIRecommendationResponse
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		log.Printf("recommendation_ai_client_decode_error path=%s err=%v", path, err)
 		return dto.GlobalMatchAIRecommendationResponse{}, fmt.Errorf("decode AI recommendation response: %w", err)
 	}
+	log.Printf("recommendation_ai_client_success path=%s top_recommendations=%d", path, len(payload.TopRecommendations))
 
 	return payload, nil
 }
@@ -118,6 +137,7 @@ func (c *HTTPRecommendationAIClient) doMultipartRecommendation(
 func buildRecommendationMultipartBody(
 	files []multipartFilePart,
 	preferences dto.RecommendationPreferenceInput,
+	allowedCandidates []dto.RecommendationAllowedCandidateInput,
 ) ([]byte, string, error) {
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
@@ -154,6 +174,13 @@ func buildRecommendationMultipartBody(
 	writeMultiValueField(writer, "scholarship_types", preferences.ScholarshipTypes)
 	writeMultiValueField(writer, "start_periods", preferences.StartPeriods)
 	writeSingleValueField(writer, "additional_preference", preferences.AdditionalPreference)
+	if len(allowedCandidates) > 0 {
+		payload, err := json.Marshal(allowedCandidates)
+		if err != nil {
+			return nil, "", fmt.Errorf("marshal allowed candidates: %w", err)
+		}
+		_ = writer.WriteField("allowed_candidates_json", string(payload))
+	}
 
 	if err := writer.Close(); err != nil {
 		return nil, "", fmt.Errorf("close multipart writer: %w", err)

@@ -15,8 +15,11 @@ type DreamRequirementStatusValue string
 const (
 	DreamRequirementStatusNotUploaded DreamRequirementStatusValue = "NOT_UPLOADED"
 	DreamRequirementStatusUploaded    DreamRequirementStatusValue = "UPLOADED"
+	DreamRequirementStatusReviewing   DreamRequirementStatusValue = "REVIEWING"
 	DreamRequirementStatusVerified    DreamRequirementStatusValue = "VERIFIED"
+	DreamRequirementStatusVerifiedWithWarning DreamRequirementStatusValue = "VERIFIED_WITH_WARNING"
 	DreamRequirementStatusRejected    DreamRequirementStatusValue = "REJECTED"
+	DreamRequirementStatusReused      DreamRequirementStatusValue = "REUSED"
 )
 
 type DreamTracker struct {
@@ -71,9 +74,20 @@ type DreamRequirementDetail struct {
 	RequirementLabel       string
 	RequirementCategory    string
 	RequirementDescription *string
+	IsRequired             bool
 	ActionLabel            string
 	CanUpload              bool
 	NeedsReupload          bool
+	Document               *Document
+}
+
+type DreamRequirementReview struct {
+	Source            string
+	Status            string
+	IsReused          bool
+	IsAlreadyVerified bool
+	AIMessage         *string
+	LastProcessedAt   *time.Time
 }
 
 type DreamTrackerFundingStatus string

@@ -3,6 +3,8 @@ package api
 import (
 	"boundless-be/middleware"
 	"boundless-be/repository"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/gin-contrib/cors"
@@ -21,8 +23,23 @@ func NewHandler(dep Dependencies) *gin.Engine {
 	router.Use(gin.Recovery())
 	router.Use(middleware.SecurityHeaders())
 
+	allowedOrigins := []string{"http://localhost:3000"}
+	if raw := strings.TrimSpace(os.Getenv("ALLOWED_CORS_ORIGINS")); raw != "" {
+		parts := strings.Split(raw, ",")
+		allowedOrigins = allowedOrigins[:0]
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				allowedOrigins = append(allowedOrigins, part)
+			}
+		}
+		if len(allowedOrigins) == 0 {
+			allowedOrigins = []string{"http://localhost:3000"}
+		}
+	}
+
 	router.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"http://localhost:3000"},
+		AllowOrigins:     allowedOrigins,
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
 		AllowCredentials: true,
@@ -32,6 +49,10 @@ func NewHandler(dep Dependencies) *gin.Engine {
 	router.GET("/", func(ctx *gin.Context) {
 		ctx.String(200, "hi\n")
 	})
+
+	if shouldServeLocalDocuments() {
+		router.Static("/documents", os.Getenv("DOCUMENT_STORAGE_DIR"))
+	}
 
 	registerAuthRoutes(router, dep.UserRepo)
 
@@ -48,4 +69,13 @@ func NewHandler(dep Dependencies) *gin.Engine {
 	}
 
 	return router
+}
+
+func shouldServeLocalDocuments() bool {
+	provider := strings.ToLower(strings.TrimSpace(os.Getenv("DOCUMENT_STORAGE_PROVIDER")))
+	if provider != "" && provider != "local" {
+		return false
+	}
+
+	return strings.TrimSpace(os.Getenv("DOCUMENT_STORAGE_DIR")) != ""
 }

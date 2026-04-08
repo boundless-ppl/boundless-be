@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -279,6 +280,17 @@ func (s *RecommendationService) GetSubmissionDetail(ctx context.Context, userID,
 	return s.repo.FindSubmissionDetail(ctx, submissionID, userID)
 }
 
+func (s *RecommendationService) PreviewAllowedCandidates(
+	ctx context.Context,
+	userID string,
+	preferences dto.RecommendationPreferenceInput,
+) ([]dto.RecommendationAllowedCandidateInput, error) {
+	if strings.TrimSpace(userID) == "" {
+		return nil, errs.ErrUnauthorized
+	}
+	return s.buildAllowedCandidates(ctx, flattenStructuredPreferences(uuid.NewString(), time.Now().UTC(), preferences))
+}
+
 type documentUploadRequest struct {
 	documentType model.DocumentType
 	header       *multipart.FileHeader
@@ -298,6 +310,7 @@ func (s *RecommendationService) processRecommendation(
 	if !s.hasAIClient {
 		return CreateRecommendationWorkflowOutput{}, errs.ErrExternalService
 	}
+	log.Printf("recommendation_service_started mode=%s user_id=%s has_transcript=%t has_cv=%t", mode, userID, transcriptReq != nil, cvReq != nil)
 
 	now := time.Now().UTC()
 	submissionID := uuid.NewString()
@@ -310,17 +323,28 @@ func (s *RecommendationService) processRecommendation(
 	if transcriptReq != nil {
 		transcriptDoc, err = s.uploadAndPersistDocument(ctx, userID, transcriptReq.documentType, transcriptReq.header)
 		if err != nil {
+			log.Printf("recommendation_service_document_error mode=%s stage=transcript_upload err=%v", mode, err)
 			return CreateRecommendationWorkflowOutput{}, err
 		}
 	}
 	if cvReq != nil {
 		cvDoc, err = s.uploadAndPersistDocument(ctx, userID, cvReq.documentType, cvReq.header)
 		if err != nil {
+			log.Printf("recommendation_service_document_error mode=%s stage=cv_upload err=%v", mode, err)
 			return CreateRecommendationWorkflowOutput{}, err
 		}
 	}
 
 	legacyPrefs := flattenStructuredPreferences(submissionID, now, preferences)
+	allowedCandidates, err := s.buildAllowedCandidates(ctx, legacyPrefs)
+	if err != nil {
+		log.Printf("recommendation_service_candidates_error mode=%s submission_id=%s err=%v", mode, submissionID, err)
+		return CreateRecommendationWorkflowOutput{}, err
+	}
+	log.Printf("recommendation_service_candidates_built mode=%s submission_id=%s count=%d", mode, submissionID, len(allowedCandidates))
+	if len(allowedCandidates) == 0 {
+		return CreateRecommendationWorkflowOutput{}, errs.ErrExternalService
+	}
 	submission := model.RecommendationSubmission{
 		RecSubmissionID:      submissionID,
 		UserID:               userID,
@@ -337,32 +361,41 @@ func (s *RecommendationService) processRecommendation(
 		Submission:  submission,
 		Preferences: legacyPrefs,
 	}); err != nil {
+		log.Printf("recommendation_service_submission_error mode=%s submission_id=%s err=%v", mode, submissionID, err)
 		return CreateRecommendationWorkflowOutput{}, err
 	}
+	log.Printf("recommendation_service_submission_created mode=%s submission_id=%s", mode, submissionID)
 
-	aiResponse, err := s.callRecommendationAI(ctx, mode, transcriptReq, cvReq, preferences)
+	log.Printf("recommendation_service_call_ai mode=%s submission_id=%s candidates=%d", mode, submissionID, len(allowedCandidates))
+	aiResponse, err := s.callRecommendationAI(ctx, mode, transcriptReq, cvReq, preferences, allowedCandidates)
 	if err != nil {
 		_ = s.repo.UpdateSubmissionStatus(ctx, submissionID, userID, model.RecommendationStatusFailed)
-		return CreateRecommendationWorkflowOutput{}, errs.ErrExternalService
+		log.Printf("recommendation_service_ai_error mode=%s submission_id=%s err=%v", mode, submissionID, err)
+		return CreateRecommendationWorkflowOutput{}, fmt.Errorf("%w: %v", errs.ErrExternalService, err)
 	}
+	log.Printf("recommendation_service_ai_success mode=%s submission_id=%s top_recommendations=%d", mode, submissionID, len(aiResponse.TopRecommendations))
 
 	resultSetID := uuid.NewString()
 	resultRows, err := mapAIResultsToRows(resultSetID, now, aiResponse)
 	if err != nil {
 		_ = s.repo.UpdateSubmissionStatus(ctx, submissionID, userID, model.RecommendationStatusFailed)
+		log.Printf("recommendation_service_map_error mode=%s submission_id=%s err=%v", mode, submissionID, err)
 		return CreateRecommendationWorkflowOutput{}, fmt.Errorf("map AI result: %w", err)
 	}
 
 	if len(resultRows) > 0 {
 		if _, err := s.repo.CreateResultSet(ctx, submissionID, now, resultRows); err != nil {
 			_ = s.repo.UpdateSubmissionStatus(ctx, submissionID, userID, model.RecommendationStatusFailed)
+			log.Printf("recommendation_service_resultset_error mode=%s submission_id=%s err=%v", mode, submissionID, err)
 			return CreateRecommendationWorkflowOutput{}, err
 		}
 	}
 
 	if err := s.repo.UpdateSubmissionStatus(ctx, submissionID, userID, model.RecommendationStatusCompleted); err != nil {
+		log.Printf("recommendation_service_status_error mode=%s submission_id=%s err=%v", mode, submissionID, err)
 		return CreateRecommendationWorkflowOutput{}, err
 	}
+	log.Printf("recommendation_service_completed mode=%s submission_id=%s result_set_id=%s", mode, submissionID, resultSetID)
 
 	return CreateRecommendationWorkflowOutput{
 		SubmissionID: submissionID,
@@ -370,6 +403,90 @@ func (s *RecommendationService) processRecommendation(
 		ResultSetID:  resultSetID,
 		Result:       aiResponse,
 	}, nil
+}
+
+func (s *RecommendationService) buildAllowedCandidates(
+	ctx context.Context,
+	preferences []model.RecommendationPreference,
+) ([]dto.RecommendationAllowedCandidateInput, error) {
+	log.Printf("recommendation_service_candidates_filters %s", summarizeRecommendationPreferences(preferences))
+	items, err := s.repo.ListRecommendationCandidates(ctx, preferences)
+	if err != nil {
+		return nil, err
+	}
+	if len(items) == 0 {
+		relaxed := relaxRecommendationPreferences(preferences)
+		log.Printf("recommendation_service_candidates_retry stage=relaxed filters=%s", summarizeRecommendationPreferences(relaxed))
+		items, err = s.repo.ListRecommendationCandidates(ctx, relaxed)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if len(items) == 0 {
+		coreOnly := keepOnlyCoreRecommendationPreferences(preferences)
+		log.Printf("recommendation_service_candidates_retry stage=core_only filters=%s", summarizeRecommendationPreferences(coreOnly))
+		items, err = s.repo.ListRecommendationCandidates(ctx, coreOnly)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	candidates := make([]dto.RecommendationAllowedCandidateInput, 0, len(items))
+	for _, item := range items {
+		candidates = append(candidates, dto.RecommendationAllowedCandidateInput{
+			ProgramID:             item.ProgramID,
+			ProgramName:           item.ProgramName,
+			UniversityName:        item.UniversityName,
+			Country:               item.Country,
+			DegreeLevel:           item.DegreeLevel,
+			Language:              item.Language,
+			FocusTags:             buildFocusTags(item.ProgramName),
+			FundingSummary:        splitDelimitedValues(item.FundingSummary, "||"),
+			AdmissionDeadline:     item.AdmissionDeadline,
+			OfficialProgramURL:    item.OfficialProgramURL,
+			OfficialUniversityURL: item.OfficialUniversityURL,
+		})
+	}
+	return candidates, nil
+}
+
+func summarizeRecommendationPreferences(preferences []model.RecommendationPreference) string {
+	parts := make([]string, 0, len(preferences))
+	for _, pref := range preferences {
+		key := strings.TrimSpace(pref.PreferenceKey)
+		value := strings.TrimSpace(pref.PreferenceValue)
+		if key == "" || value == "" {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s=%s", key, value))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func relaxRecommendationPreferences(preferences []model.RecommendationPreference) []model.RecommendationPreference {
+	result := make([]model.RecommendationPreference, 0, len(preferences))
+	for _, pref := range preferences {
+		key := strings.ToLower(strings.TrimSpace(pref.PreferenceKey))
+		switch key {
+		case "fields_of_study", "field_of_study", "field", "start_periods", "start_period", "scholarship_types", "scholarship_type", "additional_preference":
+			continue
+		default:
+			result = append(result, pref)
+		}
+	}
+	return result
+}
+
+func keepOnlyCoreRecommendationPreferences(preferences []model.RecommendationPreference) []model.RecommendationPreference {
+	result := make([]model.RecommendationPreference, 0, len(preferences))
+	for _, pref := range preferences {
+		key := strings.ToLower(strings.TrimSpace(pref.PreferenceKey))
+		switch key {
+		case "continents", "continent", "countries", "country", "degree_level":
+			result = append(result, pref)
+		}
+	}
+	return result
 }
 
 func (s *RecommendationService) uploadAndPersistDocument(
@@ -416,13 +533,15 @@ func (s *RecommendationService) callRecommendationAI(
 	transcriptReq *documentUploadRequest,
 	cvReq *documentUploadRequest,
 	preferences dto.RecommendationPreferenceInput,
+	allowedCandidates []dto.RecommendationAllowedCandidateInput,
 ) (*dto.GlobalMatchAIRecommendationResponse, error) {
 	switch mode {
 	case model.RecommendationModeProfile:
 		resp, err := s.aiClient.RecommendProfile(ctx, dto.AIProfileRecommendationRequest{
-			TranscriptFile: transcriptReq.header,
-			CVFile:         cvReq.header,
-			Preferences:    preferences,
+			TranscriptFile:    transcriptReq.header,
+			CVFile:            cvReq.header,
+			Preferences:       preferences,
+			AllowedCandidates: allowedCandidates,
 		})
 		if err != nil {
 			return nil, err
@@ -430,8 +549,9 @@ func (s *RecommendationService) callRecommendationAI(
 		return &resp, nil
 	case model.RecommendationModeTranscript:
 		resp, err := s.aiClient.RecommendTranscript(ctx, dto.AITranscriptRecommendationRequest{
-			TranscriptFile: transcriptReq.header,
-			Preferences:    preferences,
+			TranscriptFile:    transcriptReq.header,
+			Preferences:       preferences,
+			AllowedCandidates: allowedCandidates,
 		})
 		if err != nil {
 			return nil, err
@@ -439,8 +559,9 @@ func (s *RecommendationService) callRecommendationAI(
 		return &resp, nil
 	case model.RecommendationModeCV:
 		resp, err := s.aiClient.RecommendCV(ctx, dto.AICVRecommendationRequest{
-			CVFile:      cvReq.header,
-			Preferences: preferences,
+			CVFile:            cvReq.header,
+			Preferences:       preferences,
+			AllowedCandidates: allowedCandidates,
 		})
 		if err != nil {
 			return nil, err
@@ -470,6 +591,7 @@ func mapAIResultsToRows(
 		rows = append(rows, model.RecommendationResult{
 			RecResultID:                    uuid.NewString(),
 			ResultSetID:                    resultSetID,
+			ProgramID:                      item.ProgramID,
 			RankNo:                         item.Rank,
 			UniversityName:                 item.UniversityName,
 			ProgramName:                    item.ProgramName,
@@ -550,6 +672,58 @@ func addStringPreference(target *[]model.RecommendationPreference, submissionID 
 		PreferenceValue: trimmed,
 		CreatedAt:       now,
 	})
+}
+
+func splitDelimitedValues(input, delimiter string) []string {
+	if strings.TrimSpace(input) == "" {
+		return nil
+	}
+	parts := strings.Split(input, delimiter)
+	result := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
+func buildFocusTags(programName string) []string {
+	normalized := strings.NewReplacer("/", " ", "-", " ", ",", " ", "(", " ", ")", " ").Replace(strings.ToLower(programName))
+	words := strings.Fields(normalized)
+	if len(words) == 0 {
+		return nil
+	}
+	stopWords := map[string]struct{}{
+		"and": {}, "the": {}, "for": {}, "with": {}, "master": {}, "doctor": {}, "doctoral": {},
+		"msc": {}, "ma": {}, "mba": {}, "phd": {}, "of": {}, "in": {}, "science": {}, "arts": {},
+	}
+	result := make([]string, 0, 5)
+	seen := make(map[string]struct{}, 5)
+	for _, word := range words {
+		if len(word) < 3 {
+			continue
+		}
+		if _, ok := stopWords[word]; ok {
+			continue
+		}
+		if _, ok := seen[word]; ok {
+			continue
+		}
+		seen[word] = struct{}{}
+		result = append(result, word)
+		if len(result) == 5 {
+			break
+		}
+	}
+	return result
 }
 
 func documentIDPtr(doc *model.Document) *string {

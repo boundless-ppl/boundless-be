@@ -18,7 +18,11 @@ func registerDreamTrackerRoutes(router *gin.Engine, repo repository.DreamTracker
 	group := router.Group("/dream-trackers")
 	group.Use(authMiddleware.RequireAuth())
 	group.POST("", ctrl.CreateDreamTracker)
+	group.GET("", ctrl.ListDreamTrackers)
+	group.GET("/summary", ctrl.GetDreamTrackerDashboardSummary)
+	group.GET("/grouped", ctrl.GetGroupedDreamTrackers)
 	group.GET("/documents/:id", ctrl.GetDocumentDetail)
+	group.POST("/requirements/:id/document", ctrl.UploadDreamRequirementDocument)
 	group.POST("/requirements/:id/submit", ctrl.SubmitDreamRequirement)
 	group.GET("/:id", ctrl.GetDreamTrackerDetail)
 }

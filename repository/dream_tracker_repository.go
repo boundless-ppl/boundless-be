@@ -22,10 +22,21 @@ type DreamTrackerDetail struct {
 	Fundings     []model.DreamTrackerFundingOption
 }
 
+type DreamTrackerSeed struct {
+	ProgramID   string
+	Title       string
+	AdmissionID *string
+	FundingID   *string
+}
+
 type DreamTrackerRepository interface {
 	CreateDreamTracker(ctx context.Context, tracker model.DreamTracker) (model.DreamTracker, error)
+	FindDreamTrackersByUser(ctx context.Context, userID string) ([]model.DreamTracker, error)
 	FindDreamTrackerDetail(ctx context.Context, dreamTrackerID, userID string) (DreamTrackerDetail, error)
+	ResolveDreamTrackerSeed(ctx context.Context, programID *string, sourceRecResultID *string) (DreamTrackerSeed, error)
+	CreateDocument(ctx context.Context, doc model.Document) (model.Document, error)
 	FindDocumentByIDAndUser(ctx context.Context, documentID, userID string) (model.Document, error)
+	FindReusableDocumentByUserAndType(ctx context.Context, userID, documentType string) (model.Document, bool, error)
 	FindDreamRequirementStatusByIDAndUser(ctx context.Context, dreamReqStatusID, userID string) (model.DreamRequirementStatus, error)
 	UpdateDreamRequirementStatus(ctx context.Context, requirement model.DreamRequirementStatus) error
 }
@@ -111,6 +122,129 @@ func (r *DBDreamTrackerRepository) FindDreamTrackerDetail(ctx context.Context, d
 	return detail, nil
 }
 
+func (r *DBDreamTrackerRepository) FindDreamTrackersByUser(ctx context.Context, userID string) ([]model.DreamTracker, error) {
+	query := `
+		SELECT dream_tracker_id, user_id, program_id, admission_id, funding_id, title, status, created_at, updated_at, source_type, req_submission_id, source_rec_result_id
+		FROM dream_tracker
+		WHERE user_id = $1
+		ORDER BY updated_at DESC, created_at DESC
+	`
+
+	rows, err := r.db.QueryContext(ctx, query, userID)
+	if err != nil {
+		return nil, fmt.Errorf("find dream trackers by user: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]model.DreamTracker, 0)
+	for rows.Next() {
+		item, scanErr := scanDreamTracker(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate dream trackers by user: %w", err)
+	}
+
+	return items, nil
+}
+
+func (r *DBDreamTrackerRepository) ResolveDreamTrackerSeed(ctx context.Context, programID *string, sourceRecResultID *string) (DreamTrackerSeed, error) {
+	if programID == nil && sourceRecResultID == nil {
+		return DreamTrackerSeed{}, errs.ErrInvalidInput
+	}
+
+	query := `
+		WITH base AS (
+			SELECT
+				COALESCE(NULLIF(rr.program_id, ''), $1) AS program_id,
+				COALESCE(NULLIF(rr.program_name, ''), p.nama) AS program_name,
+				COALESCE(NULLIF(rr.university_name, ''), u.nama) AS university_name
+			FROM programs p
+			JOIN universities u ON u.id = p.university_id
+			LEFT JOIN recommendation_results rr ON rr.rec_result_id = $2
+			WHERE p.program_id = COALESCE(NULLIF(rr.program_id, ''), $1)
+			LIMIT 1
+		)
+		SELECT
+			base.program_id,
+			COALESCE(NULLIF(base.program_name, ''), NULLIF(base.university_name, ''), base.program_id) AS title,
+			ap.admission_id,
+			af.funding_id
+		FROM base
+		LEFT JOIN LATERAL (
+			SELECT ap.admission_id
+			FROM admission_paths ap
+			WHERE ap.program_id = base.program_id
+			ORDER BY ap.deadline ASC NULLS LAST, ap.admission_id ASC
+			LIMIT 1
+		) ap ON TRUE
+		LEFT JOIN LATERAL (
+			SELECT af.funding_id
+			FROM admission_funding af
+			INNER JOIN funding_options fo ON fo.funding_id = af.funding_id
+			WHERE ap.admission_id IS NOT NULL AND af.admission_id = ap.admission_id
+			ORDER BY
+				CASE fo.tipe_pembiayaan
+					WHEN 'SCHOLARSHIP' THEN 0
+					WHEN 'ASSISTANTSHIP' THEN 1
+					WHEN 'SPONSORSHIP' THEN 2
+					WHEN 'LOAN' THEN 3
+					ELSE 4
+				END,
+				fo.nama_beasiswa ASC,
+				af.admission_funding_id ASC
+			LIMIT 1
+		) af ON TRUE
+	`
+
+	var seed DreamTrackerSeed
+	var admissionID sql.NullString
+	var fundingID sql.NullString
+	err := r.db.QueryRowContext(
+		ctx,
+		query,
+		nullString(programID),
+		nullString(sourceRecResultID),
+	).Scan(&seed.ProgramID, &seed.Title, &admissionID, &fundingID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return DreamTrackerSeed{}, errs.ErrInvalidInput
+		}
+		return DreamTrackerSeed{}, fmt.Errorf("resolve dream tracker seed: %w", err)
+	}
+	assignNullString(&seed.AdmissionID, admissionID)
+	assignNullString(&seed.FundingID, fundingID)
+	return seed, nil
+}
+
+func (r *DBDreamTrackerRepository) CreateDocument(ctx context.Context, doc model.Document) (model.Document, error) {
+	query := `
+		INSERT INTO documents
+		(document_id, user_id, original_filename, storage_path, public_url, mime_type, size_bytes, document_type, uploaded_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+	`
+	_, err := r.db.ExecContext(
+		ctx,
+		query,
+		doc.DocumentID,
+		doc.UserID,
+		doc.OriginalFilename,
+		doc.StoragePath,
+		doc.PublicURL,
+		doc.MIMEType,
+		doc.SizeBytes,
+		doc.DocumentType,
+		doc.UploadedAt,
+	)
+	if err != nil {
+		return model.Document{}, fmt.Errorf("insert document: %w", err)
+	}
+	return doc, nil
+}
+
 func (r *DBDreamTrackerRepository) FindDocumentByIDAndUser(ctx context.Context, documentID, userID string) (model.Document, error) {
 	query := `
 		SELECT document_id, user_id, nama, original_filename, storage_path, dokumen_url, public_url, mime_type, size_bytes, dokumen_size_kb, document_type, uploaded_at
@@ -175,6 +309,40 @@ func (r *DBDreamTrackerRepository) FindDocumentByIDAndUser(ctx context.Context, 
 	}
 
 	return doc, nil
+}
+
+func (r *DBDreamTrackerRepository) FindReusableDocumentByUserAndType(ctx context.Context, userID, documentType string) (model.Document, bool, error) {
+	query := `
+		SELECT d.document_id, d.user_id, d.original_filename, d.storage_path, d.public_url, d.mime_type, d.size_bytes, d.document_type, d.uploaded_at
+		FROM documents d
+		INNER JOIN dream_requirement_status drs ON drs.document_id = d.document_id
+		INNER JOIN dream_tracker dt ON dt.dream_tracker_id = drs.dream_tracker_id
+		WHERE d.user_id = $1
+		  AND UPPER(d.document_type) = UPPER($2)
+		  AND dt.user_id = $1
+		  AND drs.status IN ('VERIFIED', 'VERIFIED_WITH_WARNING', 'REUSED')
+		ORDER BY d.uploaded_at DESC
+		LIMIT 1
+	`
+	var doc model.Document
+	err := r.db.QueryRowContext(ctx, query, userID, documentType).Scan(
+		&doc.DocumentID,
+		&doc.UserID,
+		&doc.OriginalFilename,
+		&doc.StoragePath,
+		&doc.PublicURL,
+		&doc.MIMEType,
+		&doc.SizeBytes,
+		&doc.DocumentType,
+		&doc.UploadedAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return model.Document{}, false, nil
+		}
+		return model.Document{}, false, fmt.Errorf("find reusable document by user and type: %w", err)
+	}
+	return doc, true, nil
 }
 
 func (r *DBDreamTrackerRepository) FindDreamRequirementStatusByIDAndUser(ctx context.Context, dreamReqStatusID, userID string) (model.DreamRequirementStatus, error) {
@@ -334,13 +502,37 @@ func (r *DBDreamTrackerRepository) findDreamTracker(ctx context.Context, dreamTr
 		WHERE dream_tracker_id = $1 AND user_id = $2
 	`
 
+	tracker, err := scanDreamTrackerRow(r.db.QueryRowContext(ctx, query, dreamTrackerID, userID))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return model.DreamTracker{}, errs.ErrDreamTrackerNotFound
+		}
+		return model.DreamTracker{}, fmt.Errorf("find dream tracker detail: %w", err)
+	}
+
+	return tracker, nil
+}
+
+func scanDreamTracker(scanner interface {
+	Scan(dest ...any) error
+}) (model.DreamTracker, error) {
+	item, err := scanDreamTrackerRow(scanner)
+	if err != nil {
+		return model.DreamTracker{}, fmt.Errorf("scan dream tracker: %w", err)
+	}
+	return item, nil
+}
+
+func scanDreamTrackerRow(scanner interface {
+	Scan(dest ...any) error
+}) (model.DreamTracker, error) {
 	var tracker model.DreamTracker
 	var admissionID sql.NullString
 	var fundingID sql.NullString
 	var reqSubmissionID sql.NullString
 	var sourceRecResultID sql.NullString
 
-	err := r.db.QueryRowContext(ctx, query, dreamTrackerID, userID).Scan(
+	err := scanner.Scan(
 		&tracker.DreamTrackerID,
 		&tracker.UserID,
 		&tracker.ProgramID,
@@ -355,10 +547,7 @@ func (r *DBDreamTrackerRepository) findDreamTracker(ctx context.Context, dreamTr
 		&sourceRecResultID,
 	)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return model.DreamTracker{}, errs.ErrDreamTrackerNotFound
-		}
-		return model.DreamTracker{}, fmt.Errorf("find dream tracker detail: %w", err)
+		return model.DreamTracker{}, err
 	}
 
 	assignNullString(&tracker.AdmissionID, admissionID)
@@ -372,10 +561,14 @@ func (r *DBDreamTrackerRepository) findDreamTracker(ctx context.Context, dreamTr
 func (r *DBDreamTrackerRepository) findDreamRequirementDetails(ctx context.Context, dreamTrackerID string) ([]model.DreamRequirementDetail, error) {
 	reqQuery := `
 		SELECT drs.dream_req_status_id, drs.dream_tracker_id, drs.document_id, drs.req_catalog_id, drs.status, drs.notes, drs.ai_status, drs.ai_messages, drs.created_at,
-		       rc.key, rc.label, rc.kategori, rc.deskripsi
+		       rc.key, rc.label, rc.kategori, rc.deskripsi, COALESCE(fr.is_required, FALSE),
+		       d.original_filename, d.public_url, d.mime_type, d.size_bytes, d.document_type, d.uploaded_at
 		FROM dream_requirement_status drs
+		INNER JOIN dream_tracker dt ON dt.dream_tracker_id = drs.dream_tracker_id
 		INNER JOIN requirement_catalog rc ON rc.req_catalog_id = drs.req_catalog_id
-		WHERE dream_tracker_id = $1
+		LEFT JOIN funding_requirements fr ON fr.funding_id = dt.funding_id AND fr.req_catalog_id = drs.req_catalog_id
+		LEFT JOIN documents d ON d.document_id = drs.document_id
+		WHERE drs.dream_tracker_id = $1
 		ORDER BY drs.created_at ASC, drs.dream_req_status_id ASC
 	`
 	rows, err := r.db.QueryContext(ctx, reqQuery, dreamTrackerID)
@@ -407,6 +600,12 @@ func scanDreamRequirementDetail(scanner interface {
 	var aiStatus sql.NullString
 	var aiMessages sql.NullString
 	var requirementDescription sql.NullString
+	var originalFilename sql.NullString
+	var publicURL sql.NullString
+	var mimeType sql.NullString
+	var sizeBytes sql.NullInt64
+	var documentType sql.NullString
+	var uploadedAt sql.NullTime
 
 	if err := scanner.Scan(
 		&item.DreamRequirementStatus.DreamReqStatusID,
@@ -422,6 +621,13 @@ func scanDreamRequirementDetail(scanner interface {
 		&item.RequirementLabel,
 		&item.RequirementCategory,
 		&requirementDescription,
+		&item.IsRequired,
+		&originalFilename,
+		&publicURL,
+		&mimeType,
+		&sizeBytes,
+		&documentType,
+		&uploadedAt,
 	); err != nil {
 		return model.DreamRequirementDetail{}, fmt.Errorf("scan dream requirement detail: %w", err)
 	}
@@ -432,6 +638,29 @@ func scanDreamRequirementDetail(scanner interface {
 	assignNullString(&item.DreamRequirementStatus.AIMessages, aiMessages)
 	assignNullString(&item.RequirementDescription, requirementDescription)
 	item.ActionLabel, item.CanUpload, item.NeedsReupload = buildRequirementAction(item.DreamRequirementStatus.Status)
+	if item.DocumentID != nil {
+		item.Document = &model.Document{
+			DocumentID: *item.DocumentID,
+		}
+		if originalFilename.Valid {
+			item.Document.OriginalFilename = originalFilename.String
+		}
+		if publicURL.Valid {
+			item.Document.PublicURL = publicURL.String
+		}
+		if mimeType.Valid {
+			item.Document.MIMEType = mimeType.String
+		}
+		if sizeBytes.Valid {
+			item.Document.SizeBytes = sizeBytes.Int64
+		}
+		if documentType.Valid {
+			item.Document.DocumentType = model.DocumentType(documentType.String)
+		}
+		if uploadedAt.Valid {
+			item.Document.UploadedAt = uploadedAt.Time
+		}
+	}
 
 	return item, nil
 }
@@ -440,10 +669,18 @@ func (r *DBDreamTrackerRepository) findDreamTrackerProgramInfo(ctx context.Conte
 	info := model.DreamTrackerProgramInfo{ProgramID: tracker.ProgramID}
 
 	query := `
-		SELECT ap.nama, ap.intake, ap.deadline, ap.website_url, rr.program_name, rr.university_name
+		SELECT
+			ap.nama,
+			ap.intake,
+			ap.deadline,
+			ap.website_url,
+			COALESCE(NULLIF(rr.program_name, ''), p.nama),
+			COALESCE(NULLIF(rr.university_name, ''), u.nama)
 		FROM dream_tracker dt
 		LEFT JOIN admission_paths ap ON ap.admission_id = dt.admission_id
 		LEFT JOIN recommendation_results rr ON rr.rec_result_id = dt.source_rec_result_id
+		LEFT JOIN programs p ON p.program_id = dt.program_id
+		LEFT JOIN universities u ON u.id = p.university_id
 		WHERE dt.dream_tracker_id = $1
 	`
 
