@@ -9,9 +9,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"boundless-be/controller"
 	"boundless-be/dto"
+	"boundless-be/errs"
 	"boundless-be/middleware"
 	"boundless-be/model"
 	"boundless-be/repository"
@@ -44,6 +46,11 @@ type fakeUserRepository struct {
 	findByIDErr  error
 }
 
+type fakePremiumRepository struct {
+	currentSubscription model.UserSubscription
+	currentErr          error
+}
+
 func (f *fakeUserRepository) Create(ctx context.Context, user model.User) (model.User, error) {
 	return model.User{}, nil
 }
@@ -66,10 +73,20 @@ func (f *fakeUserRepository) Update(ctx context.Context, user model.User) error 
 	return nil
 }
 
+func (f *fakePremiumRepository) FindCurrentPremiumSubscription(ctx context.Context, userID string, reference time.Time) (model.UserSubscription, error) {
+	if f.currentErr != nil {
+		return model.UserSubscription{}, f.currentErr
+	}
+	if f.currentSubscription.UserSubscriptionID == "" {
+		return model.UserSubscription{}, errs.ErrPremiumSubscriptionNotFound
+	}
+	return f.currentSubscription, nil
+}
+
 func TestRegisterSuccessController(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	svc := &fakeAuthService{}
-	c := controller.NewAuthController(svc, &fakeUserRepository{})
+	c := controller.NewAuthController(svc, &fakeUserRepository{}, nil)
 	router := gin.New()
 	router.POST("/auth/register", c.Register)
 
@@ -87,7 +104,7 @@ func TestRegisterSuccessController(t *testing.T) {
 func TestRegisterInvalidBodyController(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	svc := &fakeAuthService{}
-	c := controller.NewAuthController(svc, &fakeUserRepository{})
+	c := controller.NewAuthController(svc, &fakeUserRepository{}, nil)
 	router := gin.New()
 	router.POST("/auth/register", c.Register)
 
@@ -104,7 +121,7 @@ func TestRegisterInvalidBodyController(t *testing.T) {
 func TestRegisterDuplicateEmailController(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	svc := &fakeAuthService{registerErr: repository.ErrEmailExists}
-	c := controller.NewAuthController(svc, &fakeUserRepository{})
+	c := controller.NewAuthController(svc, &fakeUserRepository{}, nil)
 	router := gin.New()
 	router.POST("/auth/register", c.Register)
 
@@ -122,7 +139,7 @@ func TestRegisterDuplicateEmailController(t *testing.T) {
 func TestLoginSuccessController(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	svc := &fakeAuthService{loginTokens: service.AuthTokens{AccessToken: "a", RefreshToken: "r"}}
-	c := controller.NewAuthController(svc, &fakeUserRepository{})
+	c := controller.NewAuthController(svc, &fakeUserRepository{}, nil)
 	router := gin.New()
 	router.POST("/auth/login", c.Login)
 
@@ -147,7 +164,7 @@ func TestLoginSuccessController(t *testing.T) {
 func TestLoginInvalidCredentialsController(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	svc := &fakeAuthService{loginErr: service.ErrInvalidCredentials}
-	c := controller.NewAuthController(svc, &fakeUserRepository{})
+	c := controller.NewAuthController(svc, &fakeUserRepository{}, nil)
 	router := gin.New()
 	router.POST("/auth/login", c.Login)
 
@@ -168,7 +185,7 @@ func TestLoginInvalidCredentialsController(t *testing.T) {
 func TestLoginInvalidBodyController(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	svc := &fakeAuthService{}
-	c := controller.NewAuthController(svc, &fakeUserRepository{})
+	c := controller.NewAuthController(svc, &fakeUserRepository{}, nil)
 	router := gin.New()
 	router.POST("/auth/login", c.Login)
 
@@ -185,7 +202,7 @@ func TestLoginInvalidBodyController(t *testing.T) {
 func TestLogoutSuccessController(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	svc := &fakeAuthService{}
-	c := controller.NewAuthController(svc, &fakeUserRepository{})
+	c := controller.NewAuthController(svc, &fakeUserRepository{}, nil)
 	router := gin.New()
 	router.POST("/auth/logout", func(ctx *gin.Context) {
 		ctx.Set(middleware.TokenContextKey, "token")
@@ -204,7 +221,7 @@ func TestLogoutSuccessController(t *testing.T) {
 func TestLogoutUnauthorizedController(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	svc := &fakeAuthService{logoutErr: errors.New("fail")}
-	c := controller.NewAuthController(svc, &fakeUserRepository{})
+	c := controller.NewAuthController(svc, &fakeUserRepository{}, nil)
 	router := gin.New()
 	router.POST("/auth/logout", c.Logout)
 
@@ -226,7 +243,16 @@ func TestMeSuccessController(t *testing.T) {
 		Email:       "alice@example.com",
 		Role:        "admin",
 	}}
-	c := controller.NewAuthController(svc, repo)
+	c := controller.NewAuthController(svc, repo, &fakePremiumRepository{currentSubscription: model.UserSubscription{
+		UserSubscriptionID:  "us-1",
+		UserID:              "u-1",
+		SubscriptionID:      "sub-1",
+		SourcePaymentID:     "pay-1",
+		PackageNameSnapshot: "The Scholar",
+		StartDate:           time.Date(2026, time.April, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:             time.Date(2026, time.April, 30, 23, 59, 59, 0, time.UTC),
+		CreatedAt:           time.Date(2026, time.April, 1, 0, 0, 0, 0, time.UTC),
+	}})
 	router := gin.New()
 	router.GET("/auth/me", func(ctx *gin.Context) {
 		ctx.Set(middleware.UserIDContextKey, "u-1")
@@ -255,12 +281,18 @@ func TestMeSuccessController(t *testing.T) {
 	if got.Role != "admin" {
 		t.Fatalf("expected role admin, got %s", got.Role)
 	}
+	if !got.IsPremium {
+		t.Fatal("expected premium user")
+	}
+	if got.PremiumStartAt == nil || got.PremiumEndAt == nil {
+		t.Fatalf("expected premium dates, got %+v", got)
+	}
 }
 
 func TestMeUnauthorizedWhenUserIDMissingController(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	svc := &fakeAuthService{}
-	c := controller.NewAuthController(svc, &fakeUserRepository{})
+	c := controller.NewAuthController(svc, &fakeUserRepository{}, nil)
 	router := gin.New()
 	router.GET("/auth/me", c.Me)
 
@@ -276,7 +308,7 @@ func TestMeUnauthorizedWhenUserIDMissingController(t *testing.T) {
 func TestMeUnauthorizedWhenUserNotFoundController(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	svc := &fakeAuthService{}
-	c := controller.NewAuthController(svc, &fakeUserRepository{findByIDErr: repository.ErrUserNotFound})
+	c := controller.NewAuthController(svc, &fakeUserRepository{findByIDErr: repository.ErrUserNotFound}, nil)
 	router := gin.New()
 	router.GET("/auth/me", func(ctx *gin.Context) {
 		ctx.Set(middleware.UserIDContextKey, "u-missing")
@@ -289,5 +321,41 @@ func TestMeUnauthorizedWhenUserNotFoundController(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, rec.Code)
+	}
+}
+
+func TestMeNonPremiumController(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &fakeAuthService{}
+	repo := &fakeUserRepository{findByIDUser: model.User{
+		UserID:      "u-2",
+		NamaLengkap: "Bob Doe",
+		Email:       "bob@example.com",
+		Role:        "user",
+	}}
+	c := controller.NewAuthController(svc, repo, &fakePremiumRepository{currentErr: errs.ErrPremiumSubscriptionNotFound})
+	router := gin.New()
+	router.GET("/auth/me", func(ctx *gin.Context) {
+		ctx.Set(middleware.UserIDContextKey, "u-2")
+		ctx.Next()
+	}, c.Me)
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/me", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+
+	var got dto.MeResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if got.IsPremium {
+		t.Fatal("expected non premium user")
+	}
+	if got.PremiumStartAt != nil || got.PremiumEndAt != nil {
+		t.Fatalf("expected nil premium dates, got %+v", got)
 	}
 }

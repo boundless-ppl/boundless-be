@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	"boundless-be/dto"
+	"boundless-be/errs"
 	"boundless-be/middleware"
+	"boundless-be/model"
 	"boundless-be/repository"
 	"boundless-be/service"
 
@@ -19,13 +22,18 @@ type AuthService interface {
 	Logout(token string) error
 }
 
+type PremiumRepository interface {
+	FindCurrentPremiumSubscription(ctx context.Context, userID string, reference time.Time) (model.UserSubscription, error)
+}
+
 type AuthController struct {
 	authService AuthService
 	userRepo    repository.UserRepository
+	premiumRepo PremiumRepository
 }
 
-func NewAuthController(authService AuthService, userRepo repository.UserRepository) *AuthController {
-	return &AuthController{authService: authService, userRepo: userRepo}
+func NewAuthController(authService AuthService, userRepo repository.UserRepository, premiumRepo PremiumRepository) *AuthController {
+	return &AuthController{authService: authService, userRepo: userRepo, premiumRepo: premiumRepo}
 }
 
 func (c *AuthController) Register(ctx *gin.Context) {
@@ -108,10 +116,29 @@ func (c *AuthController) Me(ctx *gin.Context) {
 		return
 	}
 
-	ctx.JSON(http.StatusOK, dto.MeResponse{
+	response := dto.MeResponse{
 		UserID:      user.UserID,
 		NamaLengkap: user.NamaLengkap,
 		Email:       user.Email,
 		Role:        string(user.Role),
-	})
+		IsPremium:   false,
+	}
+
+	if c.premiumRepo != nil {
+		premiumSub, err := c.premiumRepo.FindCurrentPremiumSubscription(ctx.Request.Context(), user.UserID, time.Now().UTC())
+		if err != nil {
+			if !errors.Is(err, errs.ErrPremiumSubscriptionNotFound) {
+				ctx.JSON(http.StatusInternalServerError, dto.ErrorResponse{Error: "internal server error"})
+				return
+			}
+		} else {
+			response.IsPremium = true
+			startAt := premiumSub.StartDate.UTC().Format(time.RFC3339)
+			endAt := premiumSub.EndDate.UTC().Format(time.RFC3339)
+			response.PremiumStartAt = &startAt
+			response.PremiumEndAt = &endAt
+		}
+	}
+
+	ctx.JSON(http.StatusOK, response)
 }

@@ -9,9 +9,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func registerAuthRoutes(router *gin.Engine, userRepo repository.UserRepository) {
+func registerAuthRoutes(router *gin.Engine, userRepo repository.UserRepository, paymentRepo repository.PaymentRepository) {
 	authService := service.NewAuthService(userRepo)
-	authController := controller.NewAuthController(authService, userRepo)
+	authController := controller.NewAuthController(authService, userRepo, paymentRepo)
 	authMiddleware := middleware.NewAuthMiddleware(authService)
 
 	router.POST("/auth/register", authController.Register)

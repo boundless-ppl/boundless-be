@@ -5,8 +5,9 @@ import "time"
 type DocumentType string
 
 const (
-	DocumentTypeTranscript DocumentType = "transcript"
-	DocumentTypeCV         DocumentType = "cv"
+	DocumentTypeTranscript   DocumentType = "transcript"
+	DocumentTypeCV           DocumentType = "cv"
+	DocumentTypePaymentProof DocumentType = "payment_proof"
 )
 
 type Document struct {
