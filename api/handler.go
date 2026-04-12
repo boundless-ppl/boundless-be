@@ -11,15 +11,16 @@ import (
 )
 
 type Dependencies struct {
-	UserRepo    repository.UserRepository
-	UnivRepo    repository.UniversityRepository
-	RecRepo     repository.RecommendationRepository
-	PaymentRepo repository.PaymentRepository
+	UserRepo         repository.UserRepository
+	UnivRepo         repository.UniversityRepository
+	RecRepo          repository.RecommendationRepository
+	PaymentRepo      repository.PaymentRepository
+	DreamTrackerRepo repository.DreamTrackerRepository
 }
 
 func NewHandler(dep Dependencies) *gin.Engine {
 	router := gin.New()
-	origins := strings.Split(os.Getenv("CORS_ALLOWED_ORIGINS"), ",")
+	origins := normalizeAllowedOrigins(os.Getenv("CORS_ALLOWED_ORIGINS"))
 	router.Use(gin.Recovery())
 
 	router.Use(cors.New(cors.Config{
@@ -48,5 +49,51 @@ func NewHandler(dep Dependencies) *gin.Engine {
 		registerPaymentRoutes(router, dep.PaymentRepo, dep.UserRepo)
 	}
 
+	if dep.DreamTrackerRepo != nil && dep.UserRepo != nil {
+		registerDreamTrackerRoutes(router, dep.DreamTrackerRepo, dep.UserRepo)
+	}
+
 	return router
+}
+
+func normalizeAllowedOrigins(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return []string{"*"}
+	}
+
+	parts := strings.Split(raw, ",")
+	origins := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+
+	for _, part := range parts {
+		candidate := strings.TrimSpace(part)
+		if candidate == "" {
+			continue
+		}
+		if candidate == "*" {
+			return []string{"*"}
+		}
+		if strings.Contains(candidate, "://") {
+			if _, ok := seen[candidate]; !ok {
+				origins = append(origins, candidate)
+				seen[candidate] = struct{}{}
+			}
+			continue
+		}
+
+		for _, scheme := range []string{"http://", "https://"} {
+			origin := scheme + candidate
+			if _, ok := seen[origin]; ok {
+				continue
+			}
+			origins = append(origins, origin)
+			seen[origin] = struct{}{}
+		}
+	}
+
+	if len(origins) == 0 {
+		return []string{"*"}
+	}
+
+	return origins
 }
