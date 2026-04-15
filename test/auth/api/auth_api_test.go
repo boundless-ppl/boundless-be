@@ -158,6 +158,207 @@ func TestLogoutRevokesTokenApi(t *testing.T) {
 	}
 }
 
+// ── UpdateProfile ────────────────────────────────────────────────────────────
+
+func TestUpdateProfileSuccessApi(t *testing.T) {
+	handler := api.NewHandler(api.Dependencies{UserRepo: newTestUserRepo()})
+	registerUser(t, handler, "alice@example.com", "user")
+	tokens := loginUser(t, handler, "alice@example.com")
+
+	body, _ := json.Marshal(dto.UpdateProfileRequest{NamaLengkap: "Alice Updated"})
+	req := httptest.NewRequest(http.MethodPut, "/auth/me", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+tokens.AccessToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d — body: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+}
+
+func TestUpdateProfileReflectedInMeApi(t *testing.T) {
+	handler := api.NewHandler(api.Dependencies{UserRepo: newTestUserRepo()})
+	registerUser(t, handler, "alice@example.com", "user")
+	tokens := loginUser(t, handler, "alice@example.com")
+
+	body, _ := json.Marshal(dto.UpdateProfileRequest{NamaLengkap: "Alice Updated"})
+	req := httptest.NewRequest(http.MethodPut, "/auth/me", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+tokens.AccessToken)
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	meReq := httptest.NewRequest(http.MethodGet, "/auth/me", nil)
+	meReq.Header.Set("Authorization", "Bearer "+tokens.AccessToken)
+	meRec := httptest.NewRecorder()
+	handler.ServeHTTP(meRec, meReq)
+
+	var got dto.MeResponse
+	if err := json.Unmarshal(meRec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if got.NamaLengkap != "Alice Updated" {
+		t.Fatalf("expected updated name, got %s", got.NamaLengkap)
+	}
+}
+
+func TestUpdateProfileUnauthorizedApi(t *testing.T) {
+	handler := api.NewHandler(api.Dependencies{UserRepo: newTestUserRepo()})
+
+	body, _ := json.Marshal(dto.UpdateProfileRequest{NamaLengkap: "Alice Updated"})
+	req := httptest.NewRequest(http.MethodPut, "/auth/me", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, rec.Code)
+	}
+}
+
+func TestUpdateProfileInvalidBodyApi(t *testing.T) {
+	handler := api.NewHandler(api.Dependencies{UserRepo: newTestUserRepo()})
+	registerUser(t, handler, "alice@example.com", "user")
+	tokens := loginUser(t, handler, "alice@example.com")
+
+	req := httptest.NewRequest(http.MethodPut, "/auth/me", bytes.NewBufferString("{invalid"))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+tokens.AccessToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
+	}
+}
+
+// ── ChangePassword ───────────────────────────────────────────────────────────
+
+func TestChangePasswordSuccessApi(t *testing.T) {
+	handler := api.NewHandler(api.Dependencies{UserRepo: newTestUserRepo()})
+	registerUser(t, handler, "alice@example.com", "user")
+	tokens := loginUser(t, handler, "alice@example.com")
+
+	body, _ := json.Marshal(dto.ChangePasswordRequest{CurrentPassword: "Secret123!", NewPassword: "NewSecret456@"})
+	req := httptest.NewRequest(http.MethodPut, "/auth/me/password", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+tokens.AccessToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d — body: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+}
+
+func TestChangePasswordNewPasswordWorksApi(t *testing.T) {
+	handler := api.NewHandler(api.Dependencies{UserRepo: newTestUserRepo()})
+	registerUser(t, handler, "alice@example.com", "user")
+	tokens := loginUser(t, handler, "alice@example.com")
+
+	body, _ := json.Marshal(dto.ChangePasswordRequest{CurrentPassword: "Secret123!", NewPassword: "NewSecret456@"})
+	req := httptest.NewRequest(http.MethodPut, "/auth/me/password", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+tokens.AccessToken)
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	loginBody, _ := json.Marshal(dto.LoginRequest{Email: "alice@example.com", Password: "NewSecret456@"})
+	loginReq := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewBuffer(loginBody))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginRec := httptest.NewRecorder()
+	handler.ServeHTTP(loginRec, loginReq)
+
+	if loginRec.Code != http.StatusOK {
+		t.Fatalf("expected new password to work, got status %d", loginRec.Code)
+	}
+}
+
+func TestChangePasswordOldPasswordRejectedApi(t *testing.T) {
+	handler := api.NewHandler(api.Dependencies{UserRepo: newTestUserRepo()})
+	registerUser(t, handler, "alice@example.com", "user")
+	tokens := loginUser(t, handler, "alice@example.com")
+
+	body, _ := json.Marshal(dto.ChangePasswordRequest{CurrentPassword: "Secret123!", NewPassword: "NewSecret456@"})
+	req := httptest.NewRequest(http.MethodPut, "/auth/me/password", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+tokens.AccessToken)
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	loginBody, _ := json.Marshal(dto.LoginRequest{Email: "alice@example.com", Password: "Secret123!"})
+	loginReq := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewBuffer(loginBody))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginRec := httptest.NewRecorder()
+	handler.ServeHTTP(loginRec, loginReq)
+
+	if loginRec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected old password to be rejected, got status %d", loginRec.Code)
+	}
+}
+
+func TestChangePasswordUnauthorizedApi(t *testing.T) {
+	handler := api.NewHandler(api.Dependencies{UserRepo: newTestUserRepo()})
+
+	body, _ := json.Marshal(dto.ChangePasswordRequest{CurrentPassword: "Secret123!", NewPassword: "NewSecret456@"})
+	req := httptest.NewRequest(http.MethodPut, "/auth/me/password", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, rec.Code)
+	}
+}
+
+func TestChangePasswordInvalidBodyApi(t *testing.T) {
+	handler := api.NewHandler(api.Dependencies{UserRepo: newTestUserRepo()})
+	registerUser(t, handler, "alice@example.com", "user")
+	tokens := loginUser(t, handler, "alice@example.com")
+
+	req := httptest.NewRequest(http.MethodPut, "/auth/me/password", bytes.NewBufferString("{invalid"))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+tokens.AccessToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
+	}
+}
+
+func TestChangePasswordWrongCurrentPasswordApi(t *testing.T) {
+	handler := api.NewHandler(api.Dependencies{UserRepo: newTestUserRepo()})
+	registerUser(t, handler, "alice@example.com", "user")
+	tokens := loginUser(t, handler, "alice@example.com")
+
+	body, _ := json.Marshal(dto.ChangePasswordRequest{CurrentPassword: "WrongPass1!", NewPassword: "NewSecret456@"})
+	req := httptest.NewRequest(http.MethodPut, "/auth/me/password", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+tokens.AccessToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, rec.Code)
+	}
+}
+
+func TestChangePasswordWeakNewPasswordApi(t *testing.T) {
+	handler := api.NewHandler(api.Dependencies{UserRepo: newTestUserRepo()})
+	registerUser(t, handler, "alice@example.com", "user")
+	tokens := loginUser(t, handler, "alice@example.com")
+
+	body, _ := json.Marshal(dto.ChangePasswordRequest{CurrentPassword: "Secret123!", NewPassword: "weak"})
+	req := httptest.NewRequest(http.MethodPut, "/auth/me/password", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+tokens.AccessToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
+	}
+}
+
 func registerUser(t *testing.T, handler http.Handler, email, role string) {
 	t.Helper()
 	body, _ := json.Marshal(dto.RegisterRequest{
