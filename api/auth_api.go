@@ -16,6 +16,7 @@ func registerAuthRoutes(router *gin.Engine, userRepo repository.UserRepository, 
 
 	router.POST("/auth/register", authController.Register)
 	router.POST("/auth/login", authController.Login)
+	router.POST("/auth/refresh", authController.Refresh)
 	router.POST("/auth/logout", authMiddleware.RequireAuth(), authController.Logout)
 	router.GET("/auth/me", authMiddleware.RequireAuth(), authController.Me)
 }

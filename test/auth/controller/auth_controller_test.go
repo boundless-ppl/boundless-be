@@ -41,6 +41,10 @@ func (f *fakeAuthService) Logout(token string) error {
 	return f.logoutErr
 }
 
+func (f *fakeAuthService) RefreshAccess(refreshToken string) (string, error) {
+	return "", nil
+}
+
 type fakeUserRepository struct {
 	findByIDUser model.User
 	findByIDErr  error

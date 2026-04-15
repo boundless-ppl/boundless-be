@@ -133,6 +133,10 @@ func (s *AuthService) Logout(token string) error {
 	return s.tokenProvider.Revoke(token)
 }
 
+func (s *AuthService) RefreshAccess(refreshToken string) (string, error) {
+	return s.tokenProvider.RefreshAccessToken(refreshToken)
+}
+
 func trackFailedLogin(user model.User, now time.Time) model.User {
 	if user.FirstFailedAt.IsZero() || now.Sub(user.FirstFailedAt) > LockWindowDuration {
 		user.FirstFailedAt = now

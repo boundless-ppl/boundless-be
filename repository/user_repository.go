@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"log"
 	"strings"
 	"time"
 
@@ -68,13 +69,18 @@ func (r *DBUserRepository) Create(ctx context.Context, user model.User) (model.U
 }
 
 func (r *DBUserRepository) FindByEmail(ctx context.Context, email string) (model.User, error) {
+	normalizedEmail := strings.ToLower(strings.TrimSpace(email))
 	query := `
 		SELECT user_id, nama_lengkap, role, email, password_hash, created_at,
 		       failed_login_count, first_failed_at, locked_until
 		FROM users WHERE email = $1
 	`
-	row := r.db.QueryRowContext(ctx, query, strings.ToLower(strings.TrimSpace(email)))
-	return scanUser(row)
+	row := r.db.QueryRowContext(ctx, query, normalizedEmail)
+	user, err := scanUser(row)
+	if errors.Is(err, ErrUserNotFound) {
+		log.Printf("user lookup by email missed normalized_email=%q length=%d", normalizedEmail, len(normalizedEmail))
+	}
+	return user, err
 }
 
 func (r *DBUserRepository) FindByID(ctx context.Context, userID string) (model.User, error) {
