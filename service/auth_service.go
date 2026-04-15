@@ -89,7 +89,7 @@ func (s *AuthService) Register(ctx context.Context, fullName, role, email, passw
 func (s *AuthService) Login(ctx context.Context, email, password string) (AuthTokens, error) {
 	user, err := s.userRepo.FindByEmail(ctx, email)
 	if err != nil {
-		return AuthTokens{}, ErrInvalidCredentials
+		return AuthTokens{}, fmt.Errorf("%w: email not found", ErrInvalidCredentials)
 	}
 
 	now := time.Now()
@@ -101,19 +101,21 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (AuthTo
 	if !checkPassword(user.PasswordHash, password) {
 		user = trackFailedLogin(user, now)
 		if updateErr := s.userRepo.Update(ctx, user); updateErr != nil {
-			return AuthTokens{}, ErrInvalidCredentials
+			return AuthTokens{}, fmt.Errorf("%w: track failed login: %v", ErrInvalidCredentials, updateErr)
 		}
 		if user.LockedUntil.After(now) {
 			return AuthTokens{}, ErrAccountLocked
 		}
-		return AuthTokens{}, ErrInvalidCredentials
+		return AuthTokens{}, fmt.Errorf("%w: password mismatch", ErrInvalidCredentials)
 	}
 
-	user.FailedLoginCount = 0
-	user.FirstFailedAt = time.Time{}
-	user.LockedUntil = time.Time{}
-	if err := s.userRepo.Update(ctx, user); err != nil {
-		return AuthTokens{}, ErrInvalidCredentials
+	if user.FailedLoginCount != 0 || !user.FirstFailedAt.IsZero() || !user.LockedUntil.IsZero() {
+		user.FailedLoginCount = 0
+		user.FirstFailedAt = time.Time{}
+		user.LockedUntil = time.Time{}
+		if err := s.userRepo.Update(ctx, user); err != nil {
+			log.Printf("failed to reset login counters for user %s: %v", user.UserID, err)
+		}
 	}
 
 	return s.tokenProvider.IssueTokens(user.UserID, user.Role)
