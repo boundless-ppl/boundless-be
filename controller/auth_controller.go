@@ -2,13 +2,11 @@ package controller
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"net/http"
 	"time"
 
 	"boundless-be/dto"
-	"boundless-be/errs"
 	"boundless-be/middleware"
 	"boundless-be/model"
 	"boundless-be/repository"
@@ -127,32 +125,17 @@ func (c *AuthController) Me(ctx *gin.Context) {
 	}
 
 	if c.statusRepo != nil {
-		now := time.Now().UTC()
-		premiumSub, err := c.statusRepo.FindCurrentPremiumSubscription(ctx.Request.Context(), user.UserID, now)
+		status, err := service.BuildMeStatus(ctx.Request.Context(), c.statusRepo, user.UserID, time.Now().UTC())
 		if err != nil {
-			if !errors.Is(err, errs.ErrPremiumSubscriptionNotFound) {
-				ctx.JSON(http.StatusInternalServerError, dto.ErrorResponse{Error: "internal server error"})
-				return
-			}
-		} else {
-			response.IsPremium = true
-			startAt := premiumSub.StartDate.UTC().Format(time.RFC3339)
-			endAt := premiumSub.EndDate.UTC().Format(time.RFC3339)
-			response.PremiumStartAt = &startAt
-			response.PremiumEndAt = &endAt
+			ctx.JSON(http.StatusInternalServerError, dto.ErrorResponse{Error: "internal server error"})
+			return
 		}
 
-		pendingPayment, err := c.statusRepo.FindLatestPendingPaymentByUser(ctx.Request.Context(), user.UserID, now)
-		if err != nil {
-			if !errors.Is(err, errs.ErrPaymentNotFound) && !errors.Is(err, sql.ErrNoRows) {
-				ctx.JSON(http.StatusInternalServerError, dto.ErrorResponse{Error: "internal server error"})
-				return
-			}
-		} else if pendingPayment.ProofDocumentID != nil && (pendingPayment.ExpiredAt == nil || pendingPayment.ExpiredAt.After(now)) {
-			response.HasPendingPayment = true
-			transactionID := pendingPayment.TransactionID
-			response.TransactionID = &transactionID
-		}
+		response.IsPremium = status.IsPremium
+		response.PremiumStartAt = status.PremiumStartAt
+		response.PremiumEndAt = status.PremiumEndAt
+		response.HasPendingPayment = status.HasPendingPayment
+		response.TransactionID = status.TransactionID
 	}
 
 	ctx.JSON(http.StatusOK, response)
