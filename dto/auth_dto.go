@@ -25,11 +25,13 @@ type ErrorResponse struct {
 }
 
 type MeResponse struct {
-	UserID         string  `json:"user_id"`
-	NamaLengkap    string  `json:"nama_lengkap"`
-	Email          string  `json:"email"`
-	Role           string  `json:"role"`
-	IsPremium      bool    `json:"is_premium"`
-	PremiumStartAt *string `json:"premium_start_at,omitempty"`
-	PremiumEndAt   *string `json:"premium_end_at,omitempty"`
+	UserID            string  `json:"user_id"`
+	NamaLengkap       string  `json:"nama_lengkap"`
+	Email             string  `json:"email"`
+	Role              string  `json:"role"`
+	IsPremium         bool    `json:"is_premium"`
+	HasPendingPayment bool    `json:"has_pending_payment"`
+	TransactionID     *string `json:"transaction_id,omitempty"`
+	PremiumStartAt    *string `json:"premium_start_at,omitempty"`
+	PremiumEndAt      *string `json:"premium_end_at,omitempty"`
 }

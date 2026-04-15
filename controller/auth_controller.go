@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"net/http"
 	"time"
@@ -22,18 +23,19 @@ type AuthService interface {
 	Logout(token string) error
 }
 
-type PremiumRepository interface {
+type PaymentStatusRepository interface {
 	FindCurrentPremiumSubscription(ctx context.Context, userID string, reference time.Time) (model.UserSubscription, error)
+	FindLatestPendingPaymentByUser(ctx context.Context, userID string, reference time.Time) (model.Payment, error)
 }
 
 type AuthController struct {
 	authService AuthService
 	userRepo    repository.UserRepository
-	premiumRepo PremiumRepository
+	statusRepo  PaymentStatusRepository
 }
 
-func NewAuthController(authService AuthService, userRepo repository.UserRepository, premiumRepo PremiumRepository) *AuthController {
-	return &AuthController{authService: authService, userRepo: userRepo, premiumRepo: premiumRepo}
+func NewAuthController(authService AuthService, userRepo repository.UserRepository, statusRepo PaymentStatusRepository) *AuthController {
+	return &AuthController{authService: authService, userRepo: userRepo, statusRepo: statusRepo}
 }
 
 func (c *AuthController) Register(ctx *gin.Context) {
@@ -124,8 +126,9 @@ func (c *AuthController) Me(ctx *gin.Context) {
 		IsPremium:   false,
 	}
 
-	if c.premiumRepo != nil {
-		premiumSub, err := c.premiumRepo.FindCurrentPremiumSubscription(ctx.Request.Context(), user.UserID, time.Now().UTC())
+	if c.statusRepo != nil {
+		now := time.Now().UTC()
+		premiumSub, err := c.statusRepo.FindCurrentPremiumSubscription(ctx.Request.Context(), user.UserID, now)
 		if err != nil {
 			if !errors.Is(err, errs.ErrPremiumSubscriptionNotFound) {
 				ctx.JSON(http.StatusInternalServerError, dto.ErrorResponse{Error: "internal server error"})
@@ -137,6 +140,18 @@ func (c *AuthController) Me(ctx *gin.Context) {
 			endAt := premiumSub.EndDate.UTC().Format(time.RFC3339)
 			response.PremiumStartAt = &startAt
 			response.PremiumEndAt = &endAt
+		}
+
+		pendingPayment, err := c.statusRepo.FindLatestPendingPaymentByUser(ctx.Request.Context(), user.UserID, now)
+		if err != nil {
+			if !errors.Is(err, errs.ErrPaymentNotFound) && !errors.Is(err, sql.ErrNoRows) {
+				ctx.JSON(http.StatusInternalServerError, dto.ErrorResponse{Error: "internal server error"})
+				return
+			}
+		} else if pendingPayment.ProofDocumentID != nil && (pendingPayment.ExpiredAt == nil || pendingPayment.ExpiredAt.After(now)) {
+			response.HasPendingPayment = true
+			transactionID := pendingPayment.TransactionID
+			response.TransactionID = &transactionID
 		}
 	}
 

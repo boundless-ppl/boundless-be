@@ -71,6 +71,7 @@ type PaymentRepository interface {
 	CreateDocument(ctx context.Context, doc model.Document) (model.Document, error)
 	FindPaymentByID(ctx context.Context, paymentID string) (model.Payment, error)
 	FindPaymentByIDAndUser(ctx context.Context, paymentID, userID string) (model.Payment, error)
+	FindLatestPendingPaymentByUser(ctx context.Context, userID string, reference time.Time) (model.Payment, error)
 	FindUserSubscriptionByPaymentID(ctx context.Context, paymentID, userID string) (model.UserSubscription, error)
 	FindPremiumCoverageEndAt(ctx context.Context, userID string, reference time.Time) (*time.Time, error)
 	FindCurrentPremiumSubscription(ctx context.Context, userID string, reference time.Time) (model.UserSubscription, error)
@@ -239,6 +240,30 @@ func (r *DBPaymentRepository) FindPaymentByIDAndUser(ctx context.Context, paymen
 	`
 
 	payment, err := r.scanPayment(r.db.QueryRowContext(ctx, query, paymentID, userID))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return model.Payment{}, errs.ErrPaymentNotFound
+		}
+		return model.Payment{}, err
+	}
+
+	return payment, nil
+}
+
+func (r *DBPaymentRepository) FindLatestPendingPaymentByUser(ctx context.Context, userID string, reference time.Time) (model.Payment, error) {
+	query := `
+		SELECT payment_id, transaction_id, user_id, subscription_id, package_name_snapshot, duration_months_snapshot,
+		       price_amount_snapshot, normal_price_snapshot, discount_price_snapshot, benefits_snapshot_json, payment_channel, qris_image_url,
+		       status, admin_note, proof_document_id, verified_by, verified_at, paid_at, expired_at, created_at, updated_at
+		FROM payments
+		WHERE user_id = $1
+		  AND status = $2
+		  AND expired_at > $3
+		ORDER BY created_at DESC
+		LIMIT 1
+	`
+
+	payment, err := r.scanPayment(r.db.QueryRowContext(ctx, query, userID, model.PaymentStatusPending, reference.UTC()))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return model.Payment{}, errs.ErrPaymentNotFound
