@@ -27,12 +27,14 @@ type testUserRepo struct {
 	byID    map[string]model.User
 }
 
+const ADMIN_SUB_ID = "admin-1"
+
 func newTestUserRepo() *testUserRepo {
 	hashed, _ := bcrypt.GenerateFromPassword([]byte("Secret123!"), bcrypt.DefaultCost)
-	admin := model.User{UserID: "admin-1", NamaLengkap: "Admin", Role: "admin", Email: "admin@example.com", PasswordHash: string(hashed), CreatedAt: time.Now().UTC()}
+	admin := model.User{UserID: ADMIN_SUB_ID, NamaLengkap: "Admin", Role: "admin", Email: "admin@example.com", PasswordHash: string(hashed), CreatedAt: time.Now().UTC()}
 	return &testUserRepo{
 		byEmail: map[string]model.User{"admin@example.com": admin},
-		byID:    map[string]model.User{"admin-1": admin},
+		byID:    map[string]model.User{ADMIN_SUB_ID: admin},
 	}
 }
 
@@ -266,7 +268,7 @@ func TestAuthMeShowsPendingPaymentApi(t *testing.T) {
 	repo.payments["pay-1"] = model.Payment{
 		PaymentID:           "pay-1",
 		TransactionID:       "TX-1",
-		UserID:              "admin-1",
+		UserID:              ADMIN_SUB_ID,
 		PackageNameSnapshot: "The Scholar",
 		Status:              model.PaymentStatusPending,
 		ProofDocumentID:     ptrString("doc-1"),
