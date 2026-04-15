@@ -237,6 +237,33 @@ func TestFindPaymentByIDRepository(t *testing.T) {
 	}
 }
 
+func TestFindLatestPendingPaymentByUserRepository(t *testing.T) {
+	now := time.Now().UTC()
+	expiresSoon := now.Add(time.Hour)
+	expiresLater := now.Add(2 * time.Hour)
+	db := newFakeDB(t, &fakeBehavior{queryFn: func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		if !strings.Contains(query, "expired_at >") || !strings.Contains(query, "ORDER BY created_at DESC") {
+			t.Fatalf("unexpected query: %s", query)
+		}
+		return &fakeRows{
+			columns: []string{"payment_id", "transaction_id", "user_id", "subscription_id", "package_name_snapshot", "duration_months_snapshot", "price_amount_snapshot", "normal_price_snapshot", "discount_price_snapshot", "benefits_snapshot_json", "payment_channel", "qris_image_url", "status", "admin_note", "proof_document_id", "verified_by", "verified_at", "paid_at", "expired_at", "created_at", "updated_at"},
+			rows: [][]driver.Value{
+				{"pay-latest", "tx-latest", "user-1", "sub-1", "The Scholar", int64(3), int64(100), int64(149000), int64(39000), []byte(`["a"]`), "qris_manual", "-", "pending", nil, nil, nil, nil, nil, expiresLater, now, now},
+				{"pay-old", "tx-old", "user-1", "sub-1", "The Scholar", int64(3), int64(100), int64(149000), int64(39000), []byte(`["a"]`), "qris_manual", "-", "pending", nil, nil, nil, nil, nil, expiresSoon, now.Add(-time.Hour), now.Add(-time.Hour)},
+			},
+		}, nil
+	}})
+	repo := repository.NewPaymentRepository(db)
+
+	out, err := repo.FindLatestPendingPaymentByUser(context.Background(), "user-1", now)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if out.PaymentID != "pay-latest" {
+		t.Fatalf("expected latest payment, got %+v", out)
+	}
+}
+
 func TestFindPremiumCoverageEndAtRepository(t *testing.T) {
 	end := time.Now().UTC().AddDate(0, 1, 0)
 	db := newFakeDB(t, &fakeBehavior{queryFn: func(query string, args []driver.NamedValue) (driver.Rows, error) {

@@ -49,6 +49,8 @@ type fakeUserRepository struct {
 type fakePremiumRepository struct {
 	currentSubscription model.UserSubscription
 	currentErr          error
+	currentPayment      model.Payment
+	currentPaymentErr   error
 }
 
 func (f *fakeUserRepository) Create(ctx context.Context, user model.User) (model.User, error) {
@@ -81,6 +83,16 @@ func (f *fakePremiumRepository) FindCurrentPremiumSubscription(ctx context.Conte
 		return model.UserSubscription{}, errs.ErrPremiumSubscriptionNotFound
 	}
 	return f.currentSubscription, nil
+}
+
+func (f *fakePremiumRepository) FindLatestPendingPaymentByUser(ctx context.Context, userID string, reference time.Time) (model.Payment, error) {
+	if f.currentPaymentErr != nil {
+		return model.Payment{}, f.currentPaymentErr
+	}
+	if f.currentPayment.PaymentID == "" {
+		return model.Payment{}, errs.ErrPaymentNotFound
+	}
+	return f.currentPayment, nil
 }
 
 func TestRegisterSuccessController(t *testing.T) {
@@ -358,4 +370,136 @@ func TestMeNonPremiumController(t *testing.T) {
 	if got.PremiumStartAt != nil || got.PremiumEndAt != nil {
 		t.Fatalf("expected nil premium dates, got %+v", got)
 	}
+}
+
+func TestMeShowsPendingPaymentAwaitingAdminVerificationController(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &fakeAuthService{}
+	repo := &fakeUserRepository{findByIDUser: model.User{
+		UserID:      "u-4",
+		NamaLengkap: "Alice",
+		Email:       "alice@example.com",
+		Role:        "user",
+	}}
+	expiredAt := time.Date(2026, time.April, 16, 10, 0, 0, 0, time.UTC)
+	c := controller.NewAuthController(svc, repo, &fakePremiumRepository{currentPayment: model.Payment{
+		PaymentID:           "pay-1",
+		TransactionID:       "TX-1",
+		UserID:              "u-4",
+		PackageNameSnapshot: "The Scholar",
+		Status:              model.PaymentStatusPending,
+		ExpiredAt:           &expiredAt,
+		ProofDocumentID:     ptrString("doc-1"),
+	}})
+	router := gin.New()
+	router.GET("/auth/me", func(ctx *gin.Context) {
+		ctx.Set(middleware.UserIDContextKey, "u-4")
+		ctx.Next()
+	}, c.Me)
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/me", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+
+	var got dto.MeResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if !got.HasPendingPayment {
+		t.Fatal("expected pending payment flag")
+	}
+	if got.TransactionID == nil || *got.TransactionID != "TX-1" {
+		t.Fatalf("expected transaction id TX-1, got %+v", got.TransactionID)
+	}
+}
+
+func TestMeIgnoresExpiredPendingPaymentController(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &fakeAuthService{}
+	repo := &fakeUserRepository{findByIDUser: model.User{
+		UserID:      "u-5",
+		NamaLengkap: "Alice",
+		Email:       "alice@example.com",
+		Role:        "user",
+	}}
+	expiredAt := time.Date(2026, time.April, 14, 10, 0, 0, 0, time.UTC)
+	c := controller.NewAuthController(svc, repo, &fakePremiumRepository{currentPayment: model.Payment{
+		PaymentID:           "pay-expired",
+		TransactionID:       "TX-EXPIRED",
+		UserID:              "u-5",
+		PackageNameSnapshot: "The Scholar",
+		Status:              model.PaymentStatusPending,
+		ExpiredAt:           &expiredAt,
+		ProofDocumentID:     ptrString("doc-2"),
+	}})
+	router := gin.New()
+	router.GET("/auth/me", func(ctx *gin.Context) {
+		ctx.Set(middleware.UserIDContextKey, "u-5")
+		ctx.Next()
+	}, c.Me)
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/me", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+
+	var got dto.MeResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if got.HasPendingPayment {
+		t.Fatalf("expected expired pending payment to be ignored, got %+v", got)
+	}
+}
+
+func TestMeIgnoresPendingPaymentWithoutProofController(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &fakeAuthService{}
+	repo := &fakeUserRepository{findByIDUser: model.User{
+		UserID:      "u-6",
+		NamaLengkap: "Alice",
+		Email:       "alice@example.com",
+		Role:        "user",
+	}}
+	expiredAt := time.Date(2026, time.April, 16, 10, 0, 0, 0, time.UTC)
+	c := controller.NewAuthController(svc, repo, &fakePremiumRepository{currentPayment: model.Payment{
+		PaymentID:           "pay-no-proof",
+		TransactionID:       "TX-NO-PROOF",
+		UserID:              "u-6",
+		PackageNameSnapshot: "The Scholar",
+		Status:              model.PaymentStatusPending,
+		ExpiredAt:           &expiredAt,
+	}})
+	router := gin.New()
+	router.GET("/auth/me", func(ctx *gin.Context) {
+		ctx.Set(middleware.UserIDContextKey, "u-6")
+		ctx.Next()
+	}, c.Me)
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/me", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+
+	var got dto.MeResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if got.HasPendingPayment {
+		t.Fatalf("expected pending payment without proof to be ignored, got %+v", got)
+	}
+}
+
+func ptrString(value string) *string {
+	return &value
 }

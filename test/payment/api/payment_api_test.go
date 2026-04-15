@@ -108,6 +108,24 @@ func (r *testPaymentRepo) FindPaymentByIDAndUser(ctx context.Context, paymentID,
 	}
 	return payment, nil
 }
+func (r *testPaymentRepo) FindLatestPendingPaymentByUser(ctx context.Context, userID string, reference time.Time) (model.Payment, error) {
+	var latest model.Payment
+	for _, payment := range r.payments {
+		if payment.UserID != userID || payment.Status != model.PaymentStatusPending {
+			continue
+		}
+		if payment.ExpiredAt != nil && !payment.ExpiredAt.After(reference) {
+			continue
+		}
+		if latest.PaymentID == "" || payment.CreatedAt.After(latest.CreatedAt) {
+			latest = payment
+		}
+	}
+	if latest.PaymentID == "" {
+		return model.Payment{}, errs.ErrPaymentNotFound
+	}
+	return latest, nil
+}
 func (r *testPaymentRepo) FindUserSubscriptionByPaymentID(ctx context.Context, paymentID, userID string) (model.UserSubscription, error) {
 	return model.UserSubscription{}, sql.ErrNoRows
 }
@@ -225,4 +243,58 @@ func TestAdminPaymentForbiddenForUserApi(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("expected %d, got %d", http.StatusForbidden, rec.Code)
 	}
+}
+
+func TestAuthMeShowsPendingPaymentApi(t *testing.T) {
+	handler := api.NewHandler(api.Dependencies{UserRepo: newTestUserRepo(), PaymentRepo: newTestPaymentRepo()})
+	loginReq := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewBufferString(`{"email":"admin@example.com","password":"Secret123!"}`))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginRec := httptest.NewRecorder()
+	handler.ServeHTTP(loginRec, loginReq)
+	if loginRec.Code != http.StatusOK {
+		t.Fatalf("expected %d, got %d", http.StatusOK, loginRec.Code)
+	}
+
+	var tokens dto.AuthResponse
+	if err := json.Unmarshal(loginRec.Body.Bytes(), &tokens); err != nil {
+		t.Fatalf("unmarshal tokens: %v", err)
+	}
+
+	now := time.Now().UTC()
+	exp := now.Add(24 * time.Hour)
+	repo := newTestPaymentRepo()
+	repo.payments["pay-1"] = model.Payment{
+		PaymentID:           "pay-1",
+		TransactionID:       "TX-1",
+		UserID:              "admin-1",
+		PackageNameSnapshot: "The Scholar",
+		Status:              model.PaymentStatusPending,
+		ProofDocumentID:     ptrString("doc-1"),
+		ExpiredAt:           &exp,
+		CreatedAt:           now,
+		UpdatedAt:           now,
+	}
+	handler = api.NewHandler(api.Dependencies{UserRepo: newTestUserRepo(), PaymentRepo: repo})
+	req := httptest.NewRequest(http.MethodGet, "/auth/me", nil)
+	req.Header.Set("Authorization", "Bearer "+tokens.AccessToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected %d, got %d", http.StatusOK, rec.Code)
+	}
+
+	var out dto.MeResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal me response: %v", err)
+	}
+	if !out.HasPendingPayment {
+		t.Fatal("expected pending payment flag")
+	}
+	if out.TransactionID == nil || *out.TransactionID != "TX-1" {
+		t.Fatalf("expected transaction id TX-1, got %+v", out.TransactionID)
+	}
+}
+
+func ptrString(value string) *string {
+	return &value
 }

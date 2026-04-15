@@ -102,6 +102,22 @@ func (f *fakePaymentRepo) FindPaymentByIDAndUser(ctx context.Context, paymentID,
 	return f.paymentByUser, nil
 }
 
+func (f *fakePaymentRepo) FindLatestPendingPaymentByUser(ctx context.Context, userID string, reference time.Time) (model.Payment, error) {
+	if f.paymentByUserErr != nil {
+		return model.Payment{}, f.paymentByUserErr
+	}
+	if f.paymentByUser.PaymentID == "" {
+		return model.Payment{}, errs.ErrPaymentNotFound
+	}
+	if f.paymentByUser.UserID != userID {
+		return model.Payment{}, errs.ErrPaymentNotFound
+	}
+	if f.paymentByUser.ExpiredAt != nil && !f.paymentByUser.ExpiredAt.After(reference) {
+		return model.Payment{}, errs.ErrPaymentNotFound
+	}
+	return f.paymentByUser, nil
+}
+
 func (f *fakePaymentRepo) FindUserSubscriptionByPaymentID(ctx context.Context, paymentID, userID string) (model.UserSubscription, error) {
 	if f.userSubByPaymentErr != nil {
 		return model.UserSubscription{}, f.userSubByPaymentErr
@@ -344,6 +360,27 @@ func TestUploadProofForPaymentRejectsFinalizedPayment(t *testing.T) {
 			PaymentID: "pay-1",
 			UserID:    "user-1",
 			Status:    model.PaymentStatusSuccess,
+		},
+	}
+	svc := service.NewPaymentServiceWithDeps(repo, &fakeDocumentStorage{stored: service.StoredObject{}})
+
+	header := makeProofHeader(t)
+	_, err := svc.UploadProofForPayment(context.Background(), "user-1", "pay-1", header)
+	if err != errs.ErrPaymentNotPending {
+		t.Fatalf("expected %v, got %v", errs.ErrPaymentNotPending, err)
+	}
+}
+
+func TestUploadProofForPaymentRejectsExpiredPendingPayment(t *testing.T) {
+	expired := time.Now().UTC().Add(-time.Hour)
+	repo := &fakePaymentRepo{
+		paymentByUser: model.Payment{
+			PaymentID: "pay-1",
+			UserID:    "user-1",
+			Status:    model.PaymentStatusPending,
+			ExpiredAt: &expired,
+			CreatedAt: expired.Add(-time.Hour),
+			UpdatedAt: expired.Add(-time.Hour),
 		},
 	}
 	svc := service.NewPaymentServiceWithDeps(repo, &fakeDocumentStorage{stored: service.StoredObject{}})
