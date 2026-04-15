@@ -16,10 +16,11 @@ import (
 )
 
 var (
-	ErrInvalidCredentials = errors.New("invalid credentials")
-	ErrInvalidToken       = errors.New("invalid token")
-	ErrInvalidInput       = errors.New("invalid input")
-	ErrAccountLocked      = errors.New("account locked")
+	ErrInvalidCredentials   = errors.New("invalid credentials")
+	ErrInvalidToken         = errors.New("invalid token")
+	ErrInvalidInput         = errors.New("invalid input")
+	ErrAccountLocked        = errors.New("account locked")
+	ErrWrongCurrentPassword = errors.New("wrong current password")
 )
 
 const (
@@ -129,6 +130,34 @@ func (s *AuthService) ValidateAccessToken(token string) (TokenClaims, error) {
 
 func (s *AuthService) Logout(token string) error {
 	return s.tokenProvider.Revoke(token)
+}
+
+func (s *AuthService) UpdateProfile(ctx context.Context, userID, namaLengkap string) error {
+	user, err := s.userRepo.FindByID(ctx, userID)
+	if err != nil {
+		return ErrInvalidCredentials
+	}
+	user.NamaLengkap = namaLengkap
+	return s.userRepo.Update(ctx, user)
+}
+
+func (s *AuthService) ChangePassword(ctx context.Context, userID, currentPassword, newPassword string) error {
+	user, err := s.userRepo.FindByID(ctx, userID)
+	if err != nil {
+		return ErrInvalidCredentials
+	}
+	if !checkPassword(user.PasswordHash, currentPassword) {
+		return ErrWrongCurrentPassword
+	}
+	if !model.IsPasswordComplex(newPassword) {
+		return ErrInvalidInput
+	}
+	newHash, err := hashPassword(newPassword)
+	if err != nil {
+		return ErrInvalidInput
+	}
+	user.PasswordHash = newHash
+	return s.userRepo.Update(ctx, user)
 }
 
 func trackFailedLogin(user model.User, now time.Time) model.User {

@@ -24,6 +24,15 @@ type ErrorResponse struct {
 	Error string `json:"error"`
 }
 
+type UpdateProfileRequest struct {
+	NamaLengkap string `json:"nama_lengkap" binding:"required"`
+}
+
+type ChangePasswordRequest struct {
+	CurrentPassword string `json:"current_password" binding:"required"`
+	NewPassword     string `json:"new_password" binding:"required"`
+}
+
 type MeResponse struct {
 	UserID         string  `json:"user_id"`
 	NamaLengkap    string  `json:"nama_lengkap"`
