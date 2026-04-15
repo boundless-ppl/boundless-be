@@ -49,6 +49,7 @@ type GlobalMatchAIApplicationStrategyResponse struct {
 
 type GlobalMatchAITopRecommendationResponse struct {
 	Rank                       int                                              `json:"rank"`
+	ProgramID                  *string                                          `json:"program_id,omitempty"`
 	UniversityName             string                                           `json:"university_name"`
 	ProgramName                string                                           `json:"program_name"`
 	Country                    string                                           `json:"country"`

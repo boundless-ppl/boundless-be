@@ -258,25 +258,59 @@ func (c *RecommendationController) GetSubmissionDetail(ctx *gin.Context) {
 		for _, row := range detail.Results {
 			pros := make([]string, 0)
 			cons := make([]string, 0)
+			preferenceReasoning := make([]string, 0)
+			matchEvidence := make([]string, 0)
+			scholarships := make([]dto.GlobalMatchAIScholarshipRecommendationResponse, 0)
 			if err := json.Unmarshal([]byte(row.ProsJSON), &pros); err != nil {
 				pros = []string{}
 			}
 			if err := json.Unmarshal([]byte(row.ConsJSON), &cons); err != nil {
 				cons = []string{}
 			}
+			if row.PreferenceReasoningJSON != "" {
+				if err := json.Unmarshal([]byte(row.PreferenceReasoningJSON), &preferenceReasoning); err != nil {
+					preferenceReasoning = []string{}
+				}
+			}
+			if row.MatchEvidenceJSON != "" {
+				if err := json.Unmarshal([]byte(row.MatchEvidenceJSON), &matchEvidence); err != nil {
+					matchEvidence = []string{}
+				}
+			}
+			if row.ScholarshipRecommendationsJSON != "" {
+				if err := json.Unmarshal([]byte(row.ScholarshipRecommendationsJSON), &scholarships); err != nil {
+					scholarships = []dto.GlobalMatchAIScholarshipRecommendationResponse{}
+				}
+			}
+			if len(preferenceReasoning) == 0 && row.ReasonSummary != "" {
+				preferenceReasoning = []string{row.ReasonSummary}
+			}
+			if len(matchEvidence) == 0 && row.ReasonSummary != "" {
+				matchEvidence = []string{row.ReasonSummary}
+			}
 			resultResponses = append(resultResponses, dto.RecommendationResultResponse{
-				RankNo:            row.RankNo,
-				UniversityName:    row.UniversityName,
-				ProgramName:       row.ProgramName,
-				Country:           row.Country,
-				FitScore:          row.FitScore,
-				FitLevel:          row.FitLevel,
-				Overview:          row.Overview,
-				WhyThisUniversity: row.WhyThisUniversity,
-				WhyThisProgram:    row.WhyThisProgram,
-				ReasonSummary:     row.ReasonSummary,
-				Pros:              pros,
-				Cons:              cons,
+				RecResultID:                row.RecResultID,
+				RankNo:                     row.RankNo,
+				ProgramID:                  row.ProgramID,
+				AdmissionID:                row.AdmissionID,
+				SourceRecResultID:          row.RecResultID,
+				UniversityName:             row.UniversityName,
+				ProgramName:                row.ProgramName,
+				Country:                    row.Country,
+				FitScore:                   row.FitScore,
+				AdmissionChanceScore:       row.AdmissionChanceScore,
+				OverallRecommendationScore: row.OverallRecommendationScore,
+				FitLevel:                   row.FitLevel,
+				AdmissionDifficulty:        row.AdmissionDifficulty,
+				Overview:                   row.Overview,
+				WhyThisUniversity:          row.WhyThisUniversity,
+				WhyThisProgram:             row.WhyThisProgram,
+				PreferenceReasoning:        preferenceReasoning,
+				MatchEvidence:              matchEvidence,
+				ScholarshipRecommendations: scholarships,
+				ReasonSummary:              row.ReasonSummary,
+				Pros:                       pros,
+				Cons:                       cons,
 			})
 		}
 
@@ -309,8 +343,10 @@ func (c *RecommendationController) writeRecommendationWorkflowError(ctx *gin.Con
 		ctx.JSON(http.StatusUnauthorized, dto.ErrorResponse{Error: "authentication failed"})
 	case errors.Is(err, errs.ErrInvalidInput), errors.Is(err, errs.ErrNoDocumentProvided):
 		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: "invalid input"})
+	case errors.Is(err, errs.ErrDocumentNotFound):
+		ctx.JSON(http.StatusNotFound, dto.ErrorResponse{Error: "document not found"})
 	case errors.Is(err, errs.ErrExternalService):
-		ctx.JSON(http.StatusBadGateway, dto.ErrorResponse{Error: "external service error"})
+		ctx.JSON(http.StatusBadGateway, dto.ErrorResponse{Error: err.Error()})
 	default:
 		ctx.JSON(http.StatusInternalServerError, dto.ErrorResponse{Error: "internal server error"})
 	}

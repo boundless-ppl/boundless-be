@@ -8,6 +8,8 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,9 +17,10 @@ import (
 )
 
 const (
-	profileRecommendationPath    = "/recommend/profile"
-	transcriptRecommendationPath = "/recommend/transcript"
-	cvRecommendationPath         = "/recommend/cv"
+	profileRecommendationPath      = "/recommend/profile"
+	transcriptRecommendationPath   = "/recommend/transcript"
+	cvRecommendationPath           = "/recommend/cv"
+	defaultRecommendationAITimeout = 180 * time.Second
 )
 
 type RecommendationAIClient interface {
@@ -32,12 +35,33 @@ type HTTPRecommendationAIClient struct {
 }
 
 func NewHTTPRecommendationAIClient(baseURL string) *HTTPRecommendationAIClient {
+	return NewHTTPRecommendationAIClientWithTimeout(baseURL, recommendationAITimeout())
+}
+
+func NewHTTPRecommendationAIClientWithTimeout(baseURL string, timeout time.Duration) *HTTPRecommendationAIClient {
+	if timeout <= 0 {
+		timeout = defaultRecommendationAITimeout
+	}
 	return &HTTPRecommendationAIClient{
 		baseURL: strings.TrimSuffix(baseURL, "/"),
 		httpClient: &http.Client{
-			Timeout: 60 * time.Second,
+			Timeout: timeout,
 		},
 	}
+}
+
+func recommendationAITimeout() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("AI_SERVICE_TIMEOUT_SECONDS"))
+	if raw == "" {
+		return defaultRecommendationAITimeout
+	}
+
+	seconds, err := strconv.Atoi(raw)
+	if err != nil || seconds <= 0 {
+		return defaultRecommendationAITimeout
+	}
+
+	return time.Duration(seconds) * time.Second
 }
 
 func (c *HTTPRecommendationAIClient) RecommendProfile(ctx context.Context, req dto.AIProfileRecommendationRequest) (dto.GlobalMatchAIRecommendationResponse, error) {

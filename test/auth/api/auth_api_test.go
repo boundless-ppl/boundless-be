@@ -104,6 +104,22 @@ func TestUnknownRouteReturnsNotFoundApi(t *testing.T) {
 	}
 }
 
+func TestFaviconRouteReturnsNoContentApi(t *testing.T) {
+	handler := api.NewHandler(api.Dependencies{
+		UserRepo: newTestUserRepo(),
+	})
+	req := httptest.NewRequest(http.MethodGet, "/favicon.ico", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected status %d, got %d", http.StatusNoContent, rec.Code)
+	}
+	if rec.Body.Len() != 0 {
+		t.Fatalf("expected empty body, got %q", rec.Body.String())
+	}
+}
+
 func TestLoginRedirectsToRootUnderThreeSecondsApi(t *testing.T) {
 	handler := api.NewHandler(api.Dependencies{
 		UserRepo: newTestUserRepo(),

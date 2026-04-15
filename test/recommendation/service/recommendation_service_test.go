@@ -29,7 +29,10 @@ type fakeRecommendationRepo struct {
 	updatedStatuses        []model.RecommendationStatus
 	createdResultRows      []model.RecommendationResult
 
-	detail repository.SubmissionDetail
+	detail                  repository.SubmissionDetail
+	latestTranscriptDetail  repository.SubmissionDetail
+	findLatestTranscriptErr error
+	programMatches          []repository.RecommendationProgramMatch
 }
 
 func (f *fakeRecommendationRepo) CreateDocument(ctx context.Context, doc model.Document) (model.Document, error) {
@@ -71,6 +74,17 @@ func (f *fakeRecommendationRepo) CreateResultSet(ctx context.Context, submission
 
 func (f *fakeRecommendationRepo) FindSubmissionDetail(ctx context.Context, submissionID, userID string) (repository.SubmissionDetail, error) {
 	return f.detail, nil
+}
+
+func (f *fakeRecommendationRepo) FindLatestCompletedSubmissionByTranscriptDocument(ctx context.Context, userID, documentID string) (repository.SubmissionDetail, error) {
+	if f.findLatestTranscriptErr != nil {
+		return repository.SubmissionDetail{}, f.findLatestTranscriptErr
+	}
+	return f.latestTranscriptDetail, nil
+}
+
+func (f *fakeRecommendationRepo) FindMatchingPrograms(ctx context.Context, lookups []repository.RecommendationProgramLookup) ([]repository.RecommendationProgramMatch, error) {
+	return f.programMatches, nil
 }
 
 func makeFileHeader(t *testing.T, fieldName, filename string, content []byte) *multipart.FileHeader {
@@ -267,6 +281,11 @@ func TestCreateProfileRecommendationServiceSuccess(t *testing.T) {
 	t.Setenv("DOCUMENT_STORAGE_DIR", t.TempDir())
 
 	repo := &fakeRecommendationRepo{}
+	repo.programMatches = []repository.RecommendationProgramMatch{{
+		UniversityName: "University A",
+		ProgramName:    "Computer Science",
+		ProgramID:      "program-university-a-cs",
+	}}
 	aiClient := &fakeRecommendationAIClient{
 		profileResponse: dto.GlobalMatchAIRecommendationResponse{
 			SelectionReasoning: "strong fit",
@@ -317,6 +336,12 @@ func TestCreateProfileRecommendationServiceSuccess(t *testing.T) {
 	if len(repo.createdResultRows) != 1 {
 		t.Fatalf("expected one result row, got %d", len(repo.createdResultRows))
 	}
+	if repo.createdResultRows[0].ProgramID == nil || *repo.createdResultRows[0].ProgramID != "program-university-a-cs" {
+		t.Fatalf("expected persisted program_id, got %#v", repo.createdResultRows[0].ProgramID)
+	}
+	if out.Result.TopRecommendations[0].ProgramID == nil || *out.Result.TopRecommendations[0].ProgramID != "program-university-a-cs" {
+		t.Fatalf("expected response program_id, got %#v", out.Result.TopRecommendations[0].ProgramID)
+	}
 	if len(repo.createSubmissionParams.Preferences) != 2 {
 		t.Fatalf("expected flattened preferences, got %d", len(repo.createSubmissionParams.Preferences))
 	}
@@ -336,13 +361,90 @@ func TestCreateTranscriptRecommendationServiceMarksFailedWhenAIRequestFails(t *t
 	if !errors.Is(err, errs.ErrExternalService) {
 		t.Fatalf("expected %v, got %v", errs.ErrExternalService, err)
 	}
+	if got := err.Error(); got == "" || !bytes.Contains([]byte(got), []byte("boom")) {
+		t.Fatalf("expected wrapped upstream error, got %q", got)
+	}
 	if len(repo.updatedStatuses) == 0 || repo.updatedStatuses[0] != model.RecommendationStatusFailed {
 		t.Fatalf("expected failed status update, got %#v", repo.updatedStatuses)
 	}
 }
 
+func TestCreateTranscriptRecommendationServiceReusesCompletedSubmissionByDocumentID(t *testing.T) {
+	documentID := "doc-transcript-1"
+	repo := &fakeRecommendationRepo{
+		findDocumentByIDUser: map[string]model.Document{
+			documentID: {
+				DocumentID:   documentID,
+				UserID:       "user-1",
+				DocumentType: model.DocumentTypeTranscript,
+			},
+		},
+		latestTranscriptDetail: repository.SubmissionDetail{
+			Submission: model.RecommendationSubmission{
+				RecSubmissionID: "submission-1",
+				UserID:          "user-1",
+				Status:          model.RecommendationStatusCompleted,
+			},
+			Preferences: []model.RecommendationPreference{
+				{PreferenceKey: "countries", PreferenceValue: "Japan"},
+				{PreferenceKey: "degree_level", PreferenceValue: "Master"},
+			},
+			LatestResultSet: &model.RecommendationResultSet{
+				ResultSetID: "result-set-1",
+			},
+			Results: []model.RecommendationResult{{
+				RecResultID:                "rec-1",
+				ResultSetID:                "result-set-1",
+				RankNo:                     1,
+				UniversityName:             "University A",
+				ProgramName:                "Computer Science",
+				Country:                    "Japan",
+				FitScore:                   90,
+				OverallRecommendationScore: 88,
+				FitLevel:                   "high",
+				Overview:                   "overview",
+				WhyThisUniversity:          "why university",
+				WhyThisProgram:             "why program",
+				ReasonSummary:              "matches profile",
+				ProsJSON:                   `["strong labs"]`,
+				ConsJSON:                   `["competitive"]`,
+			}},
+		},
+	}
+	svc := service.NewRecommendationServiceWithDeps(repo, service.NewLocalDocumentStorage(t.TempDir(), ""), &fakeRecommendationAIClient{})
+
+	out, err := svc.CreateTranscriptRecommendation(context.Background(), "user-1", dto.CreateTranscriptRecommendationRequest{
+		TranscriptDocumentID: &documentID,
+		RecommendationPreferenceInput: dto.RecommendationPreferenceInput{
+			Countries:   []string{"Japan"},
+			DegreeLevel: "Master",
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if out.SubmissionID != "submission-1" {
+		t.Fatalf("expected reused submission, got %s", out.SubmissionID)
+	}
+	if out.Result == nil || len(out.Result.TopRecommendations) != 1 {
+		t.Fatalf("expected reused result, got %#v", out.Result)
+	}
+	if repo.createdDocument.DocumentID != "" {
+		t.Fatalf("expected no new document to be created, got %#v", repo.createdDocument)
+	}
+	if len(repo.updatedStatuses) != 0 {
+		t.Fatalf("expected no status updates for reuse, got %#v", repo.updatedStatuses)
+	}
+}
+
 func TestCreateCVRecommendationServiceSuccess(t *testing.T) {
-	repo := &fakeRecommendationRepo{}
+	repo := &fakeRecommendationRepo{
+		programMatches: []repository.RecommendationProgramMatch{{
+			UniversityName: "University C",
+			ProgramName:    "Data Science",
+			ProgramID:      "program-university-c-data-science",
+		}},
+	}
 	aiClient := &fakeRecommendationAIClient{
 		cvResponse: dto.GlobalMatchAIRecommendationResponse{
 			SelectionReasoning: "cv fit",
@@ -372,6 +474,40 @@ func TestCreateCVRecommendationServiceSuccess(t *testing.T) {
 	}
 	if out.Status != model.RecommendationStatusCompleted {
 		t.Fatalf("expected completed, got %s", out.Status)
+	}
+}
+
+func TestCreateProfileRecommendationServiceFailsWhenNoResultMatchesCatalog(t *testing.T) {
+	repo := &fakeRecommendationRepo{}
+	aiClient := &fakeRecommendationAIClient{
+		profileResponse: dto.GlobalMatchAIRecommendationResponse{
+			TopRecommendations: []dto.GlobalMatchAITopRecommendationResponse{{
+				Rank:              1,
+				UniversityName:    "Imaginary University",
+				ProgramName:       "Fictional Program",
+				Country:           "Nowhere",
+				FitScore:          90,
+				FitLevel:          "high",
+				Overview:          "overview",
+				WhyThisUniversity: "why university",
+				WhyThisProgram:    "why program",
+			}},
+		},
+	}
+	svc := service.NewRecommendationServiceWithDeps(repo, service.NewLocalDocumentStorage(t.TempDir(), ""), aiClient)
+
+	_, err := svc.CreateProfileRecommendation(context.Background(), "user-1", dto.CreateProfileRecommendationRequest{
+		TranscriptFile: makeFileHeader(t, "transcript_file", "transcript.pdf", []byte("%PDF-1.7 transcript")),
+		CVFile:         makeFileHeader(t, "cv_file", "cv.pdf", []byte("%PDF-1.7 cv")),
+	})
+	if !errors.Is(err, errs.ErrExternalService) {
+		t.Fatalf("expected %v, got %v", errs.ErrExternalService, err)
+	}
+	if len(repo.createdResultRows) != 0 {
+		t.Fatalf("expected no persisted results, got %d", len(repo.createdResultRows))
+	}
+	if len(repo.updatedStatuses) == 0 || repo.updatedStatuses[len(repo.updatedStatuses)-1] != model.RecommendationStatusFailed {
+		t.Fatalf("expected failed status update, got %#v", repo.updatedStatuses)
 	}
 }
 

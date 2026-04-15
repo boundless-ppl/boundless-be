@@ -1,0 +1,4 @@
+PASS
+ok  	boundless-be/test/auth/service	0.651s
+PASS
+ok  	boundless-be/test/dream_tracker/service	0.597s

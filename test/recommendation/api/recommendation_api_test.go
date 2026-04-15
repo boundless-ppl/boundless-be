@@ -88,6 +88,18 @@ func (f *fakeRecRepo) FindSubmissionDetail(ctx context.Context, submissionID, us
 	return f.detail, nil
 }
 
+func (f *fakeRecRepo) FindLatestCompletedSubmissionByTranscriptDocument(ctx context.Context, userID, documentID string) (repository.SubmissionDetail, error) {
+	return repository.SubmissionDetail{}, errs.ErrSubmissionNotFound
+}
+
+func (f *fakeRecRepo) FindMatchingPrograms(ctx context.Context, lookups []repository.RecommendationProgramLookup) ([]repository.RecommendationProgramMatch, error) {
+	return []repository.RecommendationProgramMatch{{
+		UniversityName: "University A",
+		ProgramName:    "CS",
+		ProgramID:      "program-university-a-cs",
+	}}, nil
+}
+
 func setupHandler(t *testing.T, recRepo repository.RecommendationRepository) http.Handler {
 	t.Helper()
 	t.Setenv("AUTH_SECRET", "test-secret")

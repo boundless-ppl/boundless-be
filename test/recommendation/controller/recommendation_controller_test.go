@@ -509,7 +509,7 @@ func TestCreateCVRecommendationInvalidInputController(t *testing.T) {
 }
 
 func TestCreateTranscriptRecommendationExternalServiceErrorController(t *testing.T) {
-	svc := &fakeRecommendationService{transcriptErr: errs.ErrExternalService}
+	svc := &fakeRecommendationService{transcriptErr: fmt.Errorf("%w: AI recommendation service status 502: upstream failed", errs.ErrExternalService)}
 	router := setupRecommendationRouter(svc)
 
 	body := &bytes.Buffer{}
@@ -525,6 +525,9 @@ func TestCreateTranscriptRecommendationExternalServiceErrorController(t *testing
 
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("expected %d got %d body=%s", http.StatusBadGateway, rec.Code, rec.Body.String())
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte("upstream failed")) {
+		t.Fatalf("expected upstream error detail in response, got %s", rec.Body.String())
 	}
 }
 

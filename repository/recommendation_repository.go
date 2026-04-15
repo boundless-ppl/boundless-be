@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"boundless-be/errs"
@@ -14,6 +15,17 @@ import (
 type CreateSubmissionParams struct {
 	Submission  model.RecommendationSubmission
 	Preferences []model.RecommendationPreference
+}
+
+type RecommendationProgramLookup struct {
+	UniversityName string
+	ProgramName    string
+}
+
+type RecommendationProgramMatch struct {
+	UniversityName string
+	ProgramName    string
+	ProgramID      string
 }
 
 type SubmissionDetail struct {
@@ -31,6 +43,8 @@ type RecommendationRepository interface {
 	UpdateSubmissionStatus(ctx context.Context, submissionID, userID string, status model.RecommendationStatus) error
 	CreateResultSet(ctx context.Context, submissionID string, generatedAt time.Time, results []model.RecommendationResult) (model.RecommendationResultSet, error)
 	FindSubmissionDetail(ctx context.Context, submissionID, userID string) (SubmissionDetail, error)
+	FindLatestCompletedSubmissionByTranscriptDocument(ctx context.Context, userID, documentID string) (SubmissionDetail, error)
+	FindMatchingPrograms(ctx context.Context, lookups []RecommendationProgramLookup) ([]RecommendationProgramMatch, error)
 }
 
 type DBRecommendationRepository struct {
@@ -216,9 +230,9 @@ func (r *DBRecommendationRepository) CreateResultSet(ctx context.Context, submis
 
 	insertResultQuery := `
 		INSERT INTO recommendation_results
-		(rec_result_id, result_set_id, rank_no, university_name, program_name, country, fit_score, fit_level, overview,
+		(rec_result_id, result_set_id, program_id, rank_no, university_name, program_name, country, fit_score, fit_level, overview,
 		 why_this_university, why_this_program, reason_summary, pros_json, cons_json, created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
 	`
 	for _, row := range results {
 		_, err := tx.ExecContext(
@@ -226,6 +240,7 @@ func (r *DBRecommendationRepository) CreateResultSet(ctx context.Context, submis
 			insertResultQuery,
 			row.RecResultID,
 			row.ResultSetID,
+			nullString(row.ProgramID),
 			row.RankNo,
 			row.UniversityName,
 			row.ProgramName,
@@ -250,6 +265,66 @@ func (r *DBRecommendationRepository) CreateResultSet(ctx context.Context, submis
 	}
 
 	return set, nil
+}
+
+func (r *DBRecommendationRepository) FindMatchingPrograms(ctx context.Context, lookups []RecommendationProgramLookup) ([]RecommendationProgramMatch, error) {
+	if len(lookups) == 0 {
+		return nil, nil
+	}
+
+	query := `
+		SELECT p.program_id, p.nama, u.nama
+		FROM programs p
+		INNER JOIN universities u ON u.id = p.university_id
+	`
+	rows, err := r.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("find matching programs: %w", err)
+	}
+	defer rows.Close()
+
+	lookupSet := make(map[RecommendationProgramLookup]struct{}, len(lookups))
+	for _, lookup := range lookups {
+		normalized := RecommendationProgramLookup{
+			UniversityName: normalizeRecommendationLookupValue(lookup.UniversityName),
+			ProgramName:    normalizeRecommendationLookupValue(lookup.ProgramName),
+		}
+		if normalized.UniversityName == "" || normalized.ProgramName == "" {
+			continue
+		}
+		lookupSet[normalized] = struct{}{}
+	}
+
+	matchedByLookup := make(map[RecommendationProgramLookup][]RecommendationProgramMatch, len(lookupSet))
+	for rows.Next() {
+		var match RecommendationProgramMatch
+		if err := rows.Scan(&match.ProgramID, &match.ProgramName, &match.UniversityName); err != nil {
+			return nil, fmt.Errorf("scan matching program: %w", err)
+		}
+
+		key := RecommendationProgramLookup{
+			UniversityName: normalizeRecommendationLookupValue(match.UniversityName),
+			ProgramName:    normalizeRecommendationLookupValue(match.ProgramName),
+		}
+		if _, ok := lookupSet[key]; !ok {
+			continue
+		}
+		matchedByLookup[key] = append(matchedByLookup[key], match)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate matching programs: %w", err)
+	}
+
+	matches := make([]RecommendationProgramMatch, 0, len(lookupSet))
+	for lookup := range lookupSet {
+		candidates := matchedByLookup[lookup]
+		if len(candidates) != 1 {
+			continue
+		}
+		matches = append(matches, candidates[0])
+	}
+
+	return matches, nil
 }
 
 func (r *DBRecommendationRepository) FindSubmissionDetail(ctx context.Context, submissionID, userID string) (SubmissionDetail, error) {
@@ -354,11 +429,19 @@ func (r *DBRecommendationRepository) FindSubmissionDetail(ctx context.Context, s
 	detail.LatestResultSet = &latestSet
 
 	resultsQuery := `
-		SELECT rec_result_id, result_set_id, rank_no, university_name, program_name, country, fit_score, fit_level,
-		       overview, why_this_university, why_this_program, reason_summary, pros_json, cons_json, created_at
-		FROM recommendation_results
-		WHERE result_set_id = $1
-		ORDER BY rank_no ASC
+		SELECT rr.rec_result_id, rr.result_set_id, rr.program_id, ap.admission_id, rr.rank_no, rr.university_name, rr.program_name, rr.country,
+		       rr.fit_score, COALESCE(rr.score, 0), rr.fit_level, rr.overview, rr.why_this_university, rr.why_this_program,
+		       rr.reason_summary, rr.pros_json, rr.cons_json, rr.created_at
+		FROM recommendation_results rr
+		LEFT JOIN LATERAL (
+			SELECT admission_id
+			FROM admission_paths
+			WHERE rr.program_id IS NOT NULL AND program_id = rr.program_id
+			ORDER BY deadline ASC NULLS LAST, admission_id ASC
+			LIMIT 1
+		) ap ON TRUE
+		WHERE rr.result_set_id = $1
+		ORDER BY rr.rank_no ASC
 	`
 	resultRows, err := r.db.QueryContext(ctx, resultsQuery, latestSet.ResultSetID)
 	if err != nil {
@@ -368,14 +451,19 @@ func (r *DBRecommendationRepository) FindSubmissionDetail(ctx context.Context, s
 
 	for resultRows.Next() {
 		var row model.RecommendationResult
+		var programID sql.NullString
+		var admissionID sql.NullString
 		if err := resultRows.Scan(
 			&row.RecResultID,
 			&row.ResultSetID,
+			&programID,
+			&admissionID,
 			&row.RankNo,
 			&row.UniversityName,
 			&row.ProgramName,
 			&row.Country,
 			&row.FitScore,
+			&row.OverallRecommendationScore,
 			&row.FitLevel,
 			&row.Overview,
 			&row.WhyThisUniversity,
@@ -387,6 +475,12 @@ func (r *DBRecommendationRepository) FindSubmissionDetail(ctx context.Context, s
 		); err != nil {
 			return SubmissionDetail{}, fmt.Errorf("scan recommendation result: %w", err)
 		}
+		if programID.Valid {
+			row.ProgramID = &programID.String
+		}
+		if admissionID.Valid {
+			row.AdmissionID = &admissionID.String
+		}
 		detail.Results = append(detail.Results, row)
 	}
 	if err := resultRows.Err(); err != nil {
@@ -394,6 +488,30 @@ func (r *DBRecommendationRepository) FindSubmissionDetail(ctx context.Context, s
 	}
 
 	return detail, nil
+}
+
+func (r *DBRecommendationRepository) FindLatestCompletedSubmissionByTranscriptDocument(ctx context.Context, userID, documentID string) (SubmissionDetail, error) {
+	query := `
+		SELECT rec_submission_id
+		FROM recommendation_submissions
+		WHERE user_id = $1
+		  AND transcript_document_id = $2
+		  AND cv_document_id IS NULL
+		  AND status = $3
+		ORDER BY submitted_at DESC NULLS LAST, created_at DESC
+		LIMIT 1
+	`
+
+	var submissionID string
+	err := r.db.QueryRowContext(ctx, query, userID, documentID, model.RecommendationStatusCompleted).Scan(&submissionID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return SubmissionDetail{}, errs.ErrSubmissionNotFound
+		}
+		return SubmissionDetail{}, fmt.Errorf("find latest completed transcript submission: %w", err)
+	}
+
+	return r.FindSubmissionDetail(ctx, submissionID, userID)
 }
 
 func (r *DBRecommendationRepository) findDocumentByID(ctx context.Context, documentID string) (model.Document, error) {
@@ -435,4 +553,8 @@ func nullTimePtr(t *time.Time) any {
 		return nil
 	}
 	return *t
+}
+
+func normalizeRecommendationLookupValue(value string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(strings.ToLower(value))), " ")
 }

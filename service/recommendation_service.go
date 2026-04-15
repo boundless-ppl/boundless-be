@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"mime/multipart"
 	"net/http"
@@ -239,8 +240,24 @@ func (s *RecommendationService) CreateTranscriptRecommendation(
 	userID string,
 	req dto.CreateTranscriptRecommendationRequest,
 ) (CreateRecommendationWorkflowOutput, error) {
-	if req.TranscriptFile == nil {
+	if req.TranscriptFile == nil && req.TranscriptDocumentID == nil {
 		return CreateRecommendationWorkflowOutput{}, errs.ErrInvalidInput
+	}
+
+	if req.TranscriptDocumentID != nil {
+		reused, err := s.reuseTranscriptRecommendation(ctx, userID, *req.TranscriptDocumentID, req.RecommendationPreferenceInput)
+		if err == nil {
+			return reused, nil
+		}
+		if !errors.Is(err, errs.ErrSubmissionNotFound) && !errors.Is(err, errs.ErrDocumentNotFound) {
+			return CreateRecommendationWorkflowOutput{}, err
+		}
+		if req.TranscriptFile == nil {
+			if errors.Is(err, errs.ErrDocumentNotFound) {
+				return CreateRecommendationWorkflowOutput{}, err
+			}
+			return CreateRecommendationWorkflowOutput{}, errs.ErrExternalService
+		}
 	}
 
 	return s.processRecommendation(
@@ -343,11 +360,17 @@ func (s *RecommendationService) processRecommendation(
 	aiResponse, err := s.callRecommendationAI(ctx, mode, transcriptReq, cvReq, preferences)
 	if err != nil {
 		_ = s.repo.UpdateSubmissionStatus(ctx, submissionID, userID, model.RecommendationStatusFailed)
-		return CreateRecommendationWorkflowOutput{}, errs.ErrExternalService
+		return CreateRecommendationWorkflowOutput{}, fmt.Errorf("%w: %v", errs.ErrExternalService, err)
+	}
+
+	filteredResponse, err := s.filterRecommendationsToCatalog(ctx, aiResponse)
+	if err != nil {
+		_ = s.repo.UpdateSubmissionStatus(ctx, submissionID, userID, model.RecommendationStatusFailed)
+		return CreateRecommendationWorkflowOutput{}, err
 	}
 
 	resultSetID := uuid.NewString()
-	resultRows, err := mapAIResultsToRows(resultSetID, now, aiResponse)
+	resultRows, err := mapAIResultsToRows(resultSetID, now, filteredResponse)
 	if err != nil {
 		_ = s.repo.UpdateSubmissionStatus(ctx, submissionID, userID, model.RecommendationStatusFailed)
 		return CreateRecommendationWorkflowOutput{}, fmt.Errorf("map AI result: %w", err)
@@ -368,7 +391,7 @@ func (s *RecommendationService) processRecommendation(
 		SubmissionID: submissionID,
 		Status:       model.RecommendationStatusCompleted,
 		ResultSetID:  resultSetID,
-		Result:       aiResponse,
+		Result:       filteredResponse,
 	}, nil
 }
 
@@ -451,6 +474,138 @@ func (s *RecommendationService) callRecommendationAI(
 	}
 }
 
+func (s *RecommendationService) reuseTranscriptRecommendation(
+	ctx context.Context,
+	userID string,
+	documentID string,
+	preferences dto.RecommendationPreferenceInput,
+) (CreateRecommendationWorkflowOutput, error) {
+	if userID == "" {
+		return CreateRecommendationWorkflowOutput{}, errs.ErrUnauthorized
+	}
+
+	doc, err := s.repo.FindDocumentByIDAndUser(ctx, documentID, userID)
+	if err != nil {
+		return CreateRecommendationWorkflowOutput{}, err
+	}
+	if doc.DocumentType != model.DocumentTypeTranscript {
+		return CreateRecommendationWorkflowOutput{}, errs.ErrInvalidInput
+	}
+
+	detail, err := s.repo.FindLatestCompletedSubmissionByTranscriptDocument(ctx, userID, documentID)
+	if err != nil {
+		return CreateRecommendationWorkflowOutput{}, err
+	}
+
+	requestPrefs := flattenStructuredPreferences("compare", time.Time{}, preferences)
+	if !sameRecommendationPreferences(detail.Preferences, requestPrefs) {
+		return CreateRecommendationWorkflowOutput{}, errs.ErrSubmissionNotFound
+	}
+	if detail.LatestResultSet == nil {
+		return CreateRecommendationWorkflowOutput{}, errs.ErrSubmissionNotFound
+	}
+
+	return CreateRecommendationWorkflowOutput{
+		SubmissionID: detail.Submission.RecSubmissionID,
+		Status:       detail.Submission.Status,
+		ResultSetID:  detail.LatestResultSet.ResultSetID,
+		Result:       submissionDetailToAIResponse(detail),
+	}, nil
+}
+
+func sameRecommendationPreferences(existing []model.RecommendationPreference, requested []model.RecommendationPreference) bool {
+	if len(existing) != len(requested) {
+		return false
+	}
+
+	counts := make(map[string]int, len(existing))
+	for _, pref := range existing {
+		key := pref.PreferenceKey + "\x00" + pref.PreferenceValue
+		counts[key]++
+	}
+	for _, pref := range requested {
+		key := pref.PreferenceKey + "\x00" + pref.PreferenceValue
+		counts[key]--
+		if counts[key] < 0 {
+			return false
+		}
+	}
+	for _, count := range counts {
+		if count != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func submissionDetailToAIResponse(detail repository.SubmissionDetail) *dto.GlobalMatchAIRecommendationResponse {
+	if detail.LatestResultSet == nil {
+		return nil
+	}
+
+	topRecommendations := make([]dto.GlobalMatchAITopRecommendationResponse, 0, len(detail.Results))
+	for _, row := range detail.Results {
+		pros := make([]string, 0)
+		cons := make([]string, 0)
+		preferenceReasoning := make([]string, 0)
+		matchEvidence := make([]string, 0)
+		scholarships := make([]dto.GlobalMatchAIScholarshipRecommendationResponse, 0)
+
+		if err := json.Unmarshal([]byte(row.ProsJSON), &pros); err != nil {
+			pros = []string{}
+		}
+		if err := json.Unmarshal([]byte(row.ConsJSON), &cons); err != nil {
+			cons = []string{}
+		}
+		if row.PreferenceReasoningJSON != "" {
+			if err := json.Unmarshal([]byte(row.PreferenceReasoningJSON), &preferenceReasoning); err != nil {
+				preferenceReasoning = []string{}
+			}
+		}
+		if row.MatchEvidenceJSON != "" {
+			if err := json.Unmarshal([]byte(row.MatchEvidenceJSON), &matchEvidence); err != nil {
+				matchEvidence = []string{}
+			}
+		}
+		if row.ScholarshipRecommendationsJSON != "" {
+			if err := json.Unmarshal([]byte(row.ScholarshipRecommendationsJSON), &scholarships); err != nil {
+				scholarships = []dto.GlobalMatchAIScholarshipRecommendationResponse{}
+			}
+		}
+		if len(preferenceReasoning) == 0 && row.ReasonSummary != "" {
+			preferenceReasoning = []string{row.ReasonSummary}
+		}
+		if len(matchEvidence) == 0 && row.ReasonSummary != "" {
+			matchEvidence = []string{row.ReasonSummary}
+		}
+
+		topRecommendations = append(topRecommendations, dto.GlobalMatchAITopRecommendationResponse{
+			Rank:                       row.RankNo,
+			ProgramID:                  row.ProgramID,
+			UniversityName:             row.UniversityName,
+			ProgramName:                row.ProgramName,
+			Country:                    row.Country,
+			FitScore:                   row.FitScore,
+			AdmissionChanceScore:       row.AdmissionChanceScore,
+			OverallRecommendationScore: row.OverallRecommendationScore,
+			FitLevel:                   row.FitLevel,
+			AdmissionDifficulty:        row.AdmissionDifficulty,
+			Overview:                   row.Overview,
+			WhyThisUniversity:          row.WhyThisUniversity,
+			WhyThisProgram:             row.WhyThisProgram,
+			PreferenceReasoning:        preferenceReasoning,
+			MatchEvidence:              matchEvidence,
+			ScholarshipRecommendations: scholarships,
+			Pros:                       pros,
+			Cons:                       cons,
+		})
+	}
+
+	return &dto.GlobalMatchAIRecommendationResponse{
+		TopRecommendations: topRecommendations,
+	}
+}
+
 func mapAIResultsToRows(
 	resultSetID string,
 	now time.Time,
@@ -494,6 +649,7 @@ func mapAIResultsToRows(
 		rows = append(rows, model.RecommendationResult{
 			RecResultID:                    uuid.NewString(),
 			ResultSetID:                    resultSetID,
+			ProgramID:                      item.ProgramID,
 			RankNo:                         item.Rank,
 			UniversityName:                 item.UniversityName,
 			ProgramName:                    item.ProgramName,
@@ -519,6 +675,65 @@ func mapAIResultsToRows(
 	}
 
 	return rows, nil
+}
+
+func (s *RecommendationService) filterRecommendationsToCatalog(
+	ctx context.Context,
+	resp *dto.GlobalMatchAIRecommendationResponse,
+) (*dto.GlobalMatchAIRecommendationResponse, error) {
+	if resp == nil {
+		return nil, errs.ErrInvalidInput
+	}
+
+	lookups := make([]repository.RecommendationProgramLookup, 0, len(resp.TopRecommendations))
+	for _, item := range resp.TopRecommendations {
+		lookups = append(lookups, repository.RecommendationProgramLookup{
+			UniversityName: item.UniversityName,
+			ProgramName:    item.ProgramName,
+		})
+	}
+
+	matches, err := s.repo.FindMatchingPrograms(ctx, lookups)
+	if err != nil {
+		return nil, err
+	}
+
+	matchedProgramIDs := make(map[repository.RecommendationProgramLookup]string, len(matches))
+	for _, match := range matches {
+		key := repository.RecommendationProgramLookup{
+			UniversityName: normalizeRecommendationCatalogValue(match.UniversityName),
+			ProgramName:    normalizeRecommendationCatalogValue(match.ProgramName),
+		}
+		matchedProgramIDs[key] = match.ProgramID
+	}
+
+	filtered := *resp
+	filtered.TopRecommendations = make([]dto.GlobalMatchAITopRecommendationResponse, 0, len(resp.TopRecommendations))
+	for _, item := range resp.TopRecommendations {
+		key := repository.RecommendationProgramLookup{
+			UniversityName: normalizeRecommendationCatalogValue(item.UniversityName),
+			ProgramName:    normalizeRecommendationCatalogValue(item.ProgramName),
+		}
+		programID, ok := matchedProgramIDs[key]
+		if !ok {
+			continue
+		}
+
+		cloned := item
+		cloned.ProgramID = &programID
+		cloned.Rank = len(filtered.TopRecommendations) + 1
+		filtered.TopRecommendations = append(filtered.TopRecommendations, cloned)
+	}
+
+	if len(filtered.TopRecommendations) == 0 {
+		return nil, errs.ErrExternalService
+	}
+
+	return &filtered, nil
+}
+
+func normalizeRecommendationCatalogValue(value string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(strings.ToLower(value))), " ")
 }
 
 func buildLegacyPreferences(submissionID string, now time.Time, preferences []dto.PreferenceInput) ([]model.RecommendationPreference, error) {
