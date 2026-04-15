@@ -125,15 +125,27 @@ func TestLoginWrongPasswordService(t *testing.T) {
 	}
 }
 
-func TestLoginUpdateErrorService(t *testing.T) {
+func TestLoginResetCounterUpdateErrorStillIssuesTokenService(t *testing.T) {
 	userRepo := newTestUserRepoService()
 	authService := service.NewAuthService(userRepo)
 
 	_ = authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", "Secret123!")
+	user, err := userRepo.FindByEmail(context.Background(), "alice@example.com")
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	user.FailedLoginCount = 1
+	user.FirstFailedAt = time.Now().Add(-time.Minute)
+	userRepo.byEmail[user.Email] = user
+	userRepo.byID[user.UserID] = user
+
 	userRepo.updateErr = errors.New("update failed")
-	_, err := authService.Login(context.Background(), "alice@example.com", "Secret123!")
-	if !errors.Is(err, service.ErrInvalidCredentials) {
-		t.Fatalf("expected %v, got %v", service.ErrInvalidCredentials, err)
+	tokens, err := authService.Login(context.Background(), "alice@example.com", "Secret123!")
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if tokens.AccessToken == "" || tokens.RefreshToken == "" {
+		t.Fatal("expected non-empty tokens")
 	}
 }
 
