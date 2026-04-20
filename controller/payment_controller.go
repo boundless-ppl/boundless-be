@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"strconv"
@@ -79,6 +80,7 @@ func (c *PaymentController) CreatePayment(ctx *gin.Context) {
 
 	result, err := c.paymentService.CreatePayment(ctx.Request.Context(), userID.(string), req.SubscriptionID)
 	if err != nil {
+		log.Printf("CreatePayment error: %v", err)
 		switch {
 		case errors.Is(err, errs.ErrInvalidInput):
 			ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: "invalid input"})
@@ -95,6 +97,10 @@ func (c *PaymentController) CreatePayment(ctx *gin.Context) {
 	if result.Payment.NormalPriceSnapshot != nil {
 		normalAmount = *result.Payment.NormalPriceSnapshot
 	}
+	expiredAtStr := ""
+	if result.Payment.ExpiredAt != nil {
+		expiredAtStr = result.Payment.ExpiredAt.Format(time.RFC3339)
+	}
 	ctx.JSON(http.StatusCreated, dto.CreatePaymentResponse{
 		PaymentID:      result.Payment.PaymentID,
 		TransactionID:  result.Payment.TransactionID,
@@ -106,7 +112,7 @@ func (c *PaymentController) CreatePayment(ctx *gin.Context) {
 		Benefits:       result.Payment.BenefitsSnapshot,
 		QrisImageURL:   result.Payment.QrisImageURL,
 		CreatedAt:      result.Payment.CreatedAt.Format(time.RFC3339),
-		ExpiredAt:      result.Payment.ExpiredAt.Format(time.RFC3339),
+		ExpiredAt:      expiredAtStr,
 	})
 }
 
@@ -140,6 +146,10 @@ func (c *PaymentController) GetMyPayment(ctx *gin.Context) {
 	if result.Payment.NormalPriceSnapshot != nil {
 		normalAmount = *result.Payment.NormalPriceSnapshot
 	}
+	expiredAtStr := ""
+	if result.Payment.ExpiredAt != nil {
+		expiredAtStr = result.Payment.ExpiredAt.UTC().Format(time.RFC3339)
+	}
 	response := dto.PaymentDetailResponse{
 		PaymentID:       result.Payment.PaymentID,
 		TransactionID:   result.Payment.TransactionID,
@@ -152,7 +162,7 @@ func (c *PaymentController) GetMyPayment(ctx *gin.Context) {
 		QrisImageURL:    result.Payment.QrisImageURL,
 		ProofDocumentID: result.Payment.ProofDocumentID,
 		CreatedAt:       result.Payment.CreatedAt.UTC().Format(time.RFC3339),
-		ExpiredAt:       result.Payment.ExpiredAt.UTC().Format(time.RFC3339),
+		ExpiredAt:       expiredAtStr,
 	}
 	if result.Payment.PaidAt != nil {
 		paidAt := result.Payment.PaidAt.UTC().Format(time.RFC3339)

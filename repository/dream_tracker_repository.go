@@ -33,7 +33,7 @@ type DreamTrackerRepository interface {
 	CreateDreamTracker(ctx context.Context, tracker model.DreamTracker) (model.DreamTracker, error)
 	FindDreamTrackersByUser(ctx context.Context, userID string) ([]model.DreamTracker, error)
 	FindDreamTrackerDetail(ctx context.Context, dreamTrackerID, userID string) (DreamTrackerDetail, error)
-	ResolveDreamTrackerSeed(ctx context.Context, programID *string, sourceRecResultID *string) (DreamTrackerSeed, error)
+	ResolveDreamTrackerSeed(ctx context.Context, programID *string, sourceRecResultID *string, scholarshipName *string) (DreamTrackerSeed, error)
 	CreateDocument(ctx context.Context, doc model.Document) (model.Document, error)
 	FindDocumentByIDAndUser(ctx context.Context, documentID, userID string) (model.Document, error)
 	FindReusableDocumentByUserAndType(ctx context.Context, userID, documentType string) (model.Document, bool, error)
@@ -154,7 +154,7 @@ func (r *DBDreamTrackerRepository) FindDreamTrackersByUser(ctx context.Context, 
 	return items, nil
 }
 
-func (r *DBDreamTrackerRepository) ResolveDreamTrackerSeed(ctx context.Context, programID *string, sourceRecResultID *string) (DreamTrackerSeed, error) {
+func (r *DBDreamTrackerRepository) ResolveDreamTrackerSeed(ctx context.Context, programID *string, sourceRecResultID *string, scholarshipName *string) (DreamTrackerSeed, error) {
 	if programID == nil && sourceRecResultID == nil {
 		return DreamTrackerSeed{}, errs.ErrInvalidInput
 	}
@@ -174,16 +174,27 @@ func (r *DBDreamTrackerRepository) ResolveDreamTrackerSeed(ctx context.Context, 
 		SELECT
 			base.program_id,
 			COALESCE(NULLIF(base.program_name, ''), NULLIF(base.university_name, ''), base.program_id) AS title,
-			ap.admission_id,
-			af.funding_id
+			COALESCE(sm.admission_id, ap.admission_id),
+			COALESCE(sm.funding_id, af.funding_id)
 		FROM base
+		LEFT JOIN LATERAL (
+			SELECT ap.admission_id, af.funding_id
+			FROM admission_paths ap
+			INNER JOIN admission_funding af ON af.admission_id = ap.admission_id
+			INNER JOIN funding_options fo ON fo.funding_id = af.funding_id
+			WHERE $3 IS NOT NULL
+			  AND ap.program_id = base.program_id
+			  AND LOWER(BTRIM(fo.nama_beasiswa)) = LOWER(BTRIM($3))
+			ORDER BY ap.deadline ASC NULLS LAST, ap.admission_id ASC, af.admission_funding_id ASC
+			LIMIT 1
+		) sm ON TRUE
 		LEFT JOIN LATERAL (
 			SELECT ap.admission_id
 			FROM admission_paths ap
 			WHERE ap.program_id = base.program_id
 			ORDER BY ap.deadline ASC NULLS LAST, ap.admission_id ASC
 			LIMIT 1
-		) ap ON TRUE
+		) ap ON sm.admission_id IS NULL
 		LEFT JOIN LATERAL (
 			SELECT af.funding_id
 			FROM admission_funding af
@@ -211,6 +222,7 @@ func (r *DBDreamTrackerRepository) ResolveDreamTrackerSeed(ctx context.Context, 
 		query,
 		nullString(programID),
 		nullString(sourceRecResultID),
+		nullString(scholarshipName),
 	).Scan(&seed.ProgramID, &seed.Title, &admissionID, &fundingID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -885,8 +897,10 @@ func assignNullTime(target **time.Time, value sql.NullTime) {
 
 func buildRequirementAction(status model.DreamRequirementStatusValue) (string, bool, bool) {
 	switch status {
-	case model.DreamRequirementStatusRejected:
+	case model.DreamRequirementStatusRejected, model.DreamRequirementStatusNeedsReview:
 		return "Upload Ulang", true, true
+	case model.DreamRequirementStatusUploaded, model.DreamRequirementStatusReviewing:
+		return "Upload Ulang", true, false
 	case model.DreamRequirementStatusNotUploaded:
 		return "Upload", true, false
 	default:

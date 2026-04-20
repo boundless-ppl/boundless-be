@@ -167,7 +167,7 @@ func (r *DBPaymentRepository) CreatePayment(ctx context.Context, payment model.P
 		payment.PriceAmountSnapshot,
 		payment.NormalPriceSnapshot,
 		payment.DiscountPriceSnapshot,
-		benefitsJSON,
+		string(benefitsJSON),
 		payment.PaymentChannel,
 		payment.QrisImageURL,
 		payment.Status,

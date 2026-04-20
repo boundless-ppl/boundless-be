@@ -6,18 +6,19 @@ type DreamRequirementReviewRequest struct {
 	ReqCatalogID         string `json:"req_catalog_id"`
 	DocumentID           string `json:"document_id"`
 	DocumentURL          string `json:"document_url,omitempty"`
-	StoragePath          string `json:"-"`
-	FileName             string `json:"-"`
-	FileContent          []byte `json:"-"`
 	MIMEType             string `json:"mime_type,omitempty"`
 	RequiredDocumentType string `json:"required_document_type,omitempty"`
+	RequirementLabel     string `json:"requirement_label,omitempty"`
+	ReuploadReason       string `json:"reupload_reason,omitempty"`
 }
 
 type DreamRequirementReviewResponse struct {
-	Status     string                      `json:"status"`
-	AIStatus   string                      `json:"ai_status"`
-	AIMessages []string                    `json:"ai_messages"`
-	Meta       *DreamRequirementReviewMeta `json:"meta,omitempty"`
+	Status         string                      `json:"status"`
+	AIStatus       string                      `json:"ai_status"`
+	AIMessages     []string                    `json:"ai_messages"`
+	Meta           *DreamRequirementReviewMeta `json:"meta,omitempty"`
+	ReuploadReason string                      `json:"reupload_reason,omitempty"`
+	CanReupload    bool                        `json:"can_reupload,omitempty"`
 }
 
 type DreamRequirementReviewMeta struct {
@@ -32,12 +33,4 @@ type DreamRequirementValidationCheck struct {
 	Field  string `json:"field"`
 	Status string `json:"status"`
 	Reason string `json:"reason"`
-}
-
-type DocumentVerificationResponse struct {
-	DocumentType       string                            `json:"document_type"`
-	VerificationStatus string                            `json:"verification_status"`
-	ConfidenceScore    float64                           `json:"confidence_score"`
-	ValidationChecks   []DreamRequirementValidationCheck `json:"validation_checks,omitempty"`
-	UserMessage        *string                           `json:"user_message,omitempty"`
 }

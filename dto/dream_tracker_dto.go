@@ -4,6 +4,7 @@ type CreateDreamTrackerRequest struct {
 	ProgramID         string  `json:"program_id"`
 	AdmissionID       *string `json:"admission_id"`
 	FundingID         *string `json:"funding_id"`
+	ScholarshipName   *string `json:"scholarship_name"`
 	Title             string  `json:"title"`
 	Status            string  `json:"status"`
 	SourceType        string  `json:"source_type" binding:"required"`

@@ -1,7 +1,6 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -22,13 +21,14 @@ import (
 	"github.com/google/uuid"
 )
 
-const verifyDocumentPath = "/verify-document"
+const reviewRequirementPath = "/dream-tracker/requirements/review"
 
 type CreateDreamTrackerInput struct {
 	UserID            string
 	ProgramID         string
 	AdmissionID       *string
 	FundingID         *string
+	ScholarshipName   *string
 	Title             string
 	Status            string
 	SourceType        string
@@ -123,16 +123,16 @@ func NewHTTPDreamTrackerAIClient(baseURL string) *HTTPDreamTrackerAIClient {
 }
 
 func (c *HTTPDreamTrackerAIClient) ReviewRequirement(ctx context.Context, req dto.DreamRequirementReviewRequest) (dto.DreamRequirementReviewResponse, error) {
-	payload, contentType, err := buildVerifyDocumentMultipart(req)
+	payload, err := json.Marshal(req)
 	if err != nil {
-		return dto.DreamRequirementReviewResponse{}, fmt.Errorf("build verify document payload: %w", err)
+		return dto.DreamRequirementReviewResponse{}, fmt.Errorf("marshal review requirement payload: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+verifyDocumentPath, bytes.NewReader(payload))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+reviewRequirementPath, strings.NewReader(string(payload)))
 	if err != nil {
-		return dto.DreamRequirementReviewResponse{}, fmt.Errorf("build verify document request: %w", err)
+		return dto.DreamRequirementReviewResponse{}, fmt.Errorf("build review requirement request: %w", err)
 	}
-	httpReq.Header.Set("Content-Type", contentType)
+	httpReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
@@ -145,12 +145,12 @@ func (c *HTTPDreamTrackerAIClient) ReviewRequirement(ctx context.Context, req dt
 		return dto.DreamRequirementReviewResponse{}, fmt.Errorf("dream requirement AI service status %d: %s", resp.StatusCode, strings.TrimSpace(string(payload)))
 	}
 
-	var verification dto.DocumentVerificationResponse
-	if err := json.NewDecoder(resp.Body).Decode(&verification); err != nil {
-		return dto.DreamRequirementReviewResponse{}, fmt.Errorf("decode verify document response: %w", err)
+	var review dto.DreamRequirementReviewResponse
+	if err := json.NewDecoder(resp.Body).Decode(&review); err != nil {
+		return dto.DreamRequirementReviewResponse{}, fmt.Errorf("decode review requirement response: %w", err)
 	}
 
-	return adaptVerificationResponse(verification), nil
+	return review, nil
 }
 
 type DreamTrackerService struct {
@@ -196,9 +196,10 @@ func (s *DreamTrackerService) CreateDreamTracker(ctx context.Context, input Crea
 
 	trimmedProgramID := strings.TrimSpace(input.ProgramID)
 	trimmedTitle := strings.TrimSpace(input.Title)
-	seedNeeded := trimmedProgramID == "" || trimmedTitle == "" || input.AdmissionID == nil || input.FundingID == nil
+	scholarshipRequested := input.ScholarshipName != nil || input.FundingID != nil
+	seedNeeded := trimmedProgramID == "" || trimmedTitle == "" || input.AdmissionID == nil || (scholarshipRequested && input.FundingID == nil)
 	if seedNeeded {
-		seed, err := s.repo.ResolveDreamTrackerSeed(ctx, nullableTrimmedString(trimmedProgramID), input.SourceRecResultID)
+		seed, err := s.repo.ResolveDreamTrackerSeed(ctx, nullableTrimmedString(trimmedProgramID), input.SourceRecResultID, nullableTrimmedStringPtr(input.ScholarshipName))
 		if err != nil {
 			return CreateDreamTrackerOutput{}, err
 		}
@@ -211,7 +212,7 @@ func (s *DreamTrackerService) CreateDreamTracker(ctx context.Context, input Crea
 		if input.AdmissionID == nil {
 			input.AdmissionID = seed.AdmissionID
 		}
-		if input.FundingID == nil {
+		if scholarshipRequested && input.FundingID == nil {
 			input.FundingID = seed.FundingID
 		}
 	}
@@ -253,6 +254,14 @@ func nullableTrimmedString(value string) *string {
 		return nil
 	}
 	return &value
+}
+
+func nullableTrimmedStringPtr(value *string) *string {
+	if value == nil || strings.TrimSpace(*value) == "" {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	return &trimmed
 }
 
 func (s *DreamTrackerService) GetDreamTrackerDetail(ctx context.Context, userID, dreamTrackerID string) (repository.DreamTrackerDetail, error) {
@@ -334,16 +343,25 @@ func (s *DreamTrackerService) GetGroupedDreamTrackers(
 		}
 		universities[universityKey].Items = append(universities[universityKey].Items, groupItem)
 
-		for _, funding := range item.Fundings {
-			fundingKey := firstNonEmpty(funding.FundingID, funding.NamaBeasiswa)
-			if _, ok := fundings[fundingKey]; !ok {
-				fundingOrder = append(fundingOrder, fundingKey)
-				fundings[fundingKey] = &DreamTrackerFundingGroup{
-					FundingID:   funding.FundingID,
-					FundingName: funding.NamaBeasiswa,
+		if item.DreamTracker.FundingID != nil && strings.TrimSpace(*item.DreamTracker.FundingID) != "" {
+			selectedFundingID := strings.TrimSpace(*item.DreamTracker.FundingID)
+			selectedFundingName := selectedFundingID
+			for _, funding := range item.Fundings {
+				if strings.TrimSpace(funding.FundingID) != selectedFundingID {
+					continue
+				}
+				selectedFundingName = firstNonEmpty(funding.NamaBeasiswa, selectedFundingID)
+				break
+			}
+
+			if _, ok := fundings[selectedFundingID]; !ok {
+				fundingOrder = append(fundingOrder, selectedFundingID)
+				fundings[selectedFundingID] = &DreamTrackerFundingGroup{
+					FundingID:   selectedFundingID,
+					FundingName: selectedFundingName,
 				}
 			}
-			fundings[fundingKey].Items = append(fundings[fundingKey].Items, groupItem)
+			fundings[selectedFundingID].Items = append(fundings[selectedFundingID].Items, groupItem)
 		}
 	}
 
@@ -430,22 +448,22 @@ func (s *DreamTrackerService) SubmitDreamRequirement(ctx context.Context, input 
 		return output, nil
 	}
 
-	requiredDocumentType := s.findRequiredDocumentType(ctx, input.UserID, requirement)
+	requirementLabel := s.findRequirementLabel(ctx, input.UserID, requirement)
 
 	review, err := s.aiClient.ReviewRequirement(ctx, dto.DreamRequirementReviewRequest{
 		DreamReqStatusID:     requirement.DreamReqStatusID,
 		DreamTrackerID:       requirement.DreamTrackerID,
 		ReqCatalogID:         requirement.ReqCatalogID,
 		DocumentID:           doc.DocumentID,
-		StoragePath:          doc.StoragePath,
-		FileName:             coalesceDocumentFilename(doc),
-		DocumentURL:          firstNonEmpty(doc.DokumenURL, doc.PublicURL),
+		DocumentURL:          resolveReviewDocumentURL(doc),
 		MIMEType:             doc.MIMEType,
-		RequiredDocumentType: requiredDocumentType,
+		RequiredDocumentType: strings.TrimSpace(string(doc.DocumentType)),
+		RequirementLabel:     requirementLabel,
 	})
 	if err != nil {
 		failed := "FAILED"
 		message := err.Error()
+		requirement.Status = model.DreamRequirementStatusNeedsReview
 		requirement.AIStatus = &failed
 		requirement.AIMessages = &message
 		_ = s.repo.UpdateDreamRequirementStatus(ctx, requirement)
@@ -583,179 +601,56 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func buildVerifyDocumentMultipart(req dto.DreamRequirementReviewRequest) ([]byte, string, error) {
-	fileName := strings.TrimSpace(req.FileName)
-	fileContent := req.FileContent
-	if len(fileContent) == 0 {
-		var err error
-		fileName, fileContent, err = loadDocumentPayload(req)
-		if err != nil {
-			return nil, "", err
-		}
-	}
-	if fileName == "" {
-		fileName = "document"
-	}
+func resolveReviewDocumentURL(doc model.Document) string {
+	publicURL := strings.TrimSpace(firstNonEmpty(doc.DokumenURL, doc.PublicURL))
+	localPath := resolveLocalDocumentPath(doc.StoragePath)
 
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
+	if useLocalDocumentPathForAI() && localPath != "" {
+		return localPath
+	}
+	if publicURL != "" {
+		return publicURL
+	}
+	return localPath
+}
 
-	fileWriter, err := writer.CreateFormFile("file", fileName)
+func useLocalDocumentPathForAI() bool {
+	raw := strings.TrimSpace(os.Getenv("AI_SERVICE_URL"))
+	if raw == "" {
+		return false
+	}
+	parsed, err := url.Parse(raw)
 	if err != nil {
-		return nil, "", fmt.Errorf("create multipart file field: %w", err)
+		return false
 	}
-	if _, err := fileWriter.Write(fileContent); err != nil {
-		return nil, "", fmt.Errorf("write multipart file field: %w", err)
+	host := strings.TrimSpace(parsed.Hostname())
+	if host == "" {
+		return false
 	}
-
-	formFields := map[string]string{
-		"user_id":        "dream-tracker",
-		"requirement_id": req.ReqCatalogID,
-		"explain_result": "false",
-	}
-	if strings.TrimSpace(req.RequiredDocumentType) != "" {
-		formFields["required_document_type"] = strings.TrimSpace(req.RequiredDocumentType)
-	}
-	for key, value := range formFields {
-		if err := writer.WriteField(key, value); err != nil {
-			return nil, "", fmt.Errorf("write multipart field %s: %w", key, err)
-		}
-	}
-	if err := writer.Close(); err != nil {
-		return nil, "", fmt.Errorf("close multipart writer: %w", err)
-	}
-
-	return body.Bytes(), writer.FormDataContentType(), nil
+	return strings.EqualFold(host, "localhost") || host == "127.0.0.1" || host == "::1"
 }
 
-func loadDocumentPayload(req dto.DreamRequirementReviewRequest) (string, []byte, error) {
-	if path := strings.TrimSpace(req.StoragePath); path != "" {
-		if fileName, content, err := tryReadDocumentPath(path); err == nil {
-			return fileName, content, nil
-		}
+func resolveLocalDocumentPath(storagePath string) string {
+	trimmed := strings.TrimSpace(storagePath)
+	if trimmed == "" {
+		return ""
 	}
-
-	if rawURL := strings.TrimSpace(req.DocumentURL); rawURL != "" {
-		if fileName, content, err := tryReadDocumentURL(rawURL); err == nil {
-			return fileName, content, nil
-		}
+	if filepath.IsAbs(trimmed) {
+		return trimmed
 	}
-
-	return "", nil, errs.ErrInvalidInput
-}
-
-func tryReadDocumentPath(path string) (string, []byte, error) {
-	cleaned := strings.TrimSpace(path)
-	if cleaned == "" {
-		return "", nil, errs.ErrInvalidInput
-	}
-
-	if filepath.IsAbs(cleaned) {
-		content, err := os.ReadFile(cleaned)
-		if err != nil {
-			return "", nil, err
-		}
-		return filepath.Base(cleaned), content, nil
-	}
-
 	baseDir := strings.TrimSpace(os.Getenv("DOCUMENT_STORAGE_DIR"))
 	if baseDir == "" {
 		baseDir = "uploads"
 	}
-	fullPath := filepath.Join(baseDir, cleaned)
-	content, err := os.ReadFile(fullPath)
+	joined := filepath.Join(baseDir, trimmed)
+	abs, err := filepath.Abs(joined)
 	if err != nil {
-		return "", nil, err
+		return joined
 	}
-	return filepath.Base(fullPath), content, nil
+	return abs
 }
 
-func tryReadDocumentURL(rawURL string) (string, []byte, error) {
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		return "", nil, err
-	}
-	if parsed.Scheme == "" || parsed.Scheme == "file" {
-		return tryReadDocumentPath(parsed.Path)
-	}
-
-	resp, err := http.Get(rawURL)
-	if err != nil {
-		return "", nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return "", nil, fmt.Errorf("document fetch status %d", resp.StatusCode)
-	}
-	content, err := io.ReadAll(io.LimitReader(resp.Body, MaxDocumentSizeBytes+1))
-	if err != nil {
-		return "", nil, err
-	}
-	if int64(len(content)) > MaxDocumentSizeBytes {
-		return "", nil, errs.ErrInvalidInput
-	}
-	return filepath.Base(parsed.Path), content, nil
-}
-
-func adaptVerificationResponse(verification dto.DocumentVerificationResponse) dto.DreamRequirementReviewResponse {
-	status := strings.TrimSpace(verification.VerificationStatus)
-	if status == "" {
-		status = "REJECTED"
-	}
-
-	message := verification.UserMessage
-	if message == nil || strings.TrimSpace(*message) == "" {
-		if fallback := deriveVerificationMessage(verification); fallback != "" {
-			message = &fallback
-		}
-	}
-
-	review := dto.DreamRequirementReviewResponse{
-		Status:   status,
-		AIStatus: "COMPLETED",
-		Meta: &dto.DreamRequirementReviewMeta{
-			DocumentType:       verification.DocumentType,
-			VerificationStatus: verification.VerificationStatus,
-			ConfidenceScore:    verification.ConfidenceScore,
-			UserMessage:        message,
-			ValidationChecks:   verification.ValidationChecks,
-		},
-	}
-	if message != nil && strings.TrimSpace(*message) != "" {
-		review.AIMessages = []string{strings.TrimSpace(*message)}
-	}
-	return review
-}
-
-func deriveVerificationMessage(verification dto.DocumentVerificationResponse) string {
-	for _, check := range verification.ValidationChecks {
-		if strings.EqualFold(check.Status, "FAIL") && strings.TrimSpace(check.Reason) != "" {
-			return strings.TrimSpace(check.Reason)
-		}
-	}
-	return ""
-}
-
-func coalesceDocumentFilename(doc model.Document) string {
-	if strings.TrimSpace(doc.OriginalFilename) != "" {
-		return strings.TrimSpace(doc.OriginalFilename)
-	}
-	if rawURL := strings.TrimSpace(firstNonEmpty(doc.DokumenURL, doc.PublicURL)); rawURL != "" {
-		if parsed, err := url.Parse(rawURL); err == nil {
-			if name := filepath.Base(parsed.Path); name != "." && name != "/" && name != "" {
-				return name
-			}
-		}
-	}
-	if strings.TrimSpace(doc.StoragePath) != "" {
-		if name := filepath.Base(strings.TrimSpace(doc.StoragePath)); name != "." && name != "/" && name != "" {
-			return name
-		}
-	}
-	return "document"
-}
-
-func (s *DreamTrackerService) findRequiredDocumentType(
+func (s *DreamTrackerService) findRequirementLabel(
 	ctx context.Context,
 	userID string,
 	requirement model.DreamRequirementStatus,
@@ -764,56 +659,11 @@ func (s *DreamTrackerService) findRequiredDocumentType(
 	if err != nil {
 		return ""
 	}
-
 	for _, item := range detail.Requirements {
-		if item.DreamReqStatusID != requirement.DreamReqStatusID {
-			continue
-		}
-		if documentType := inferDreamRequirementDocumentType(item); documentType != "" {
-			return documentType
+		if item.DreamReqStatusID == requirement.DreamReqStatusID {
+			return strings.TrimSpace(item.RequirementLabel)
 		}
 	}
-
-	return ""
-}
-
-func inferDreamRequirementDocumentType(requirement model.DreamRequirementDetail) string {
-	candidates := []string{
-		strings.TrimSpace(requirement.RequirementKey),
-		strings.TrimSpace(requirement.RequirementLabel),
-		strings.TrimSpace(requirement.RequirementCategory),
-	}
-
-	for _, candidate := range candidates {
-		normalized := strings.ToLower(candidate)
-		switch {
-		case strings.Contains(normalized, "transcript"), strings.Contains(normalized, "transkrip"):
-			return "TRANSCRIPT"
-		case strings.Contains(normalized, "passport"), strings.Contains(normalized, "paspor"):
-			return "PASSPORT"
-		case strings.Contains(normalized, "ktp"), strings.Contains(normalized, "identity"), strings.Contains(normalized, "identitas"):
-			return "KTP"
-		case strings.Contains(normalized, "kartu keluarga"), strings.Contains(normalized, "family card"), strings.Contains(normalized, "kk"):
-			return "KK"
-		case strings.Contains(normalized, "diploma"), strings.Contains(normalized, "ijazah"), strings.Contains(normalized, "degree certificate"):
-			return "DIPLOMA"
-		case strings.Contains(normalized, "duolingo"):
-			return "DUOLINGO_CERT"
-		case strings.Contains(normalized, "surat rekomendasi"), strings.Contains(normalized, "recommendation letter"), strings.Contains(normalized, "letter of recommendation"), strings.Contains(normalized, "reference letter"), strings.Contains(normalized, "rekomendasi"), strings.Contains(normalized, "lor"):
-			return "RECOMMENDATION_LETTER"
-		case strings.Contains(normalized, "offer letter"), strings.Contains(normalized, "acceptance letter"), strings.Contains(normalized, "letter of acceptance"):
-			return "OFFER_LETTER"
-		case strings.Contains(normalized, "scholarship"), strings.Contains(normalized, "award letter"), strings.Contains(normalized, "loa beasiswa"):
-			return "SCHOLARSHIP_LETTER"
-		case strings.Contains(normalized, "bank statement"), strings.Contains(normalized, "rekening koran"), strings.Contains(normalized, "financial statement"):
-			return "BANK_STATEMENT"
-		case strings.Contains(normalized, "sponsorship"):
-			return "SPONSORSHIP_LETTER"
-		case strings.Contains(normalized, "visa"):
-			return "VISA_LETTER"
-		}
-	}
-
 	return ""
 }
 
@@ -849,7 +699,8 @@ func canonicalizeDreamRequirementDocumentType(raw string) string {
 		return "OFFER_LETTER"
 	case strings.Contains(normalized, "scholarship"), strings.Contains(normalized, "award letter"):
 		return "SCHOLARSHIP_LETTER"
-	case strings.Contains(normalized, "bank statement"), strings.Contains(normalized, "rekening koran"), strings.Contains(normalized, "financial statement"):
+	case strings.Contains(normalized, "bank statement"), strings.Contains(normalized, "rekening koran"), strings.Contains(normalized, "financial statement"),
+		strings.Contains(normalized, "financial support"), strings.Contains(normalized, "financial proof"), normalized == "financial_proof":
 		return "BANK_STATEMENT"
 	case strings.Contains(normalized, "sponsorship"):
 		return "SPONSORSHIP_LETTER"

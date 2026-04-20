@@ -28,6 +28,22 @@ type RecommendationProgramMatch struct {
 	ProgramID      string
 }
 
+type RecommendationAllowedCandidate struct {
+	ProgramID             string
+	ProgramName           string
+	UniversityName        string
+	CountryCode           string
+	OfficialProgramURL    string
+	OfficialUniversityURL string
+}
+
+type RecommendationScholarshipMatch struct {
+	ProgramID       string
+	ScholarshipName string
+	FundingID       string
+	AdmissionID     string
+}
+
 type SubmissionDetail struct {
 	Submission      model.RecommendationSubmission
 	Documents       []model.Document
@@ -45,6 +61,9 @@ type RecommendationRepository interface {
 	FindSubmissionDetail(ctx context.Context, submissionID, userID string) (SubmissionDetail, error)
 	FindLatestCompletedSubmissionByTranscriptDocument(ctx context.Context, userID, documentID string) (SubmissionDetail, error)
 	FindMatchingPrograms(ctx context.Context, lookups []RecommendationProgramLookup) ([]RecommendationProgramMatch, error)
+	ListRecommendationCountryCodes(ctx context.Context) ([]string, error)
+	FindRecommendationAllowedCandidates(ctx context.Context, preferredCountryCodes []string, limit int) ([]RecommendationAllowedCandidate, error)
+	FindScholarshipMatches(ctx context.Context, programIDs []string) ([]RecommendationScholarshipMatch, error)
 }
 
 type DBRecommendationRepository struct {
@@ -230,9 +249,11 @@ func (r *DBRecommendationRepository) CreateResultSet(ctx context.Context, submis
 
 	insertResultQuery := `
 		INSERT INTO recommendation_results
-		(rec_result_id, result_set_id, program_id, rank_no, university_name, program_name, country, fit_score, fit_level, overview,
-		 why_this_university, why_this_program, reason_summary, pros_json, cons_json, created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+		(rec_result_id, result_set_id, program_id, rank_no, university_name, program_name, country, fit_score,
+		 admission_chance_score, overall_recommendation_score, fit_level, admission_difficulty, score_breakdown_json,
+		 overview, why_this_university, why_this_program, preference_reasoning_json, match_evidence_json,
+		 scholarship_recommendations_json, reason_summary, pros_json, cons_json, raw_recommendation_json, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
 	`
 	for _, row := range results {
 		_, err := tx.ExecContext(
@@ -246,13 +267,21 @@ func (r *DBRecommendationRepository) CreateResultSet(ctx context.Context, submis
 			row.ProgramName,
 			row.Country,
 			row.FitScore,
+			row.AdmissionChanceScore,
+			row.OverallRecommendationScore,
 			row.FitLevel,
+			row.AdmissionDifficulty,
+			row.ScoreBreakdownJSON,
 			row.Overview,
 			row.WhyThisUniversity,
 			row.WhyThisProgram,
+			row.PreferenceReasoningJSON,
+			row.MatchEvidenceJSON,
+			row.ScholarshipRecommendationsJSON,
 			row.ReasonSummary,
 			row.ProsJSON,
 			row.ConsJSON,
+			row.RawRecommendationJSON,
 			row.CreatedAt,
 		)
 		if err != nil {
@@ -272,17 +301,6 @@ func (r *DBRecommendationRepository) FindMatchingPrograms(ctx context.Context, l
 		return nil, nil
 	}
 
-	query := `
-		SELECT p.program_id, p.nama, u.nama
-		FROM programs p
-		INNER JOIN universities u ON u.id = p.university_id
-	`
-	rows, err := r.db.QueryContext(ctx, query)
-	if err != nil {
-		return nil, fmt.Errorf("find matching programs: %w", err)
-	}
-	defer rows.Close()
-
 	lookupSet := make(map[RecommendationProgramLookup]struct{}, len(lookups))
 	for _, lookup := range lookups {
 		normalized := RecommendationProgramLookup{
@@ -294,20 +312,50 @@ func (r *DBRecommendationRepository) FindMatchingPrograms(ctx context.Context, l
 		}
 		lookupSet[normalized] = struct{}{}
 	}
+	if len(lookupSet) == 0 {
+		return nil, nil
+	}
+
+	queryArgs := make([]any, 0, len(lookupSet)*2)
+	valueClauses := make([]string, 0, len(lookupSet))
+	argIndex := 1
+	for lookup := range lookupSet {
+		valueClauses = append(valueClauses, fmt.Sprintf("($%d, $%d)", argIndex, argIndex+1))
+		queryArgs = append(queryArgs, lookup.UniversityName, lookup.ProgramName)
+		argIndex += 2
+	}
+
+	query := fmt.Sprintf(`
+		WITH wanted(university_name, program_name) AS (
+			VALUES %s
+		)
+		SELECT p.program_id, p.nama, u.nama, wanted.university_name, wanted.program_name
+		FROM wanted
+		INNER JOIN universities u
+			ON regexp_replace(lower(trim(u.nama)), '\s+', ' ', 'g') = wanted.university_name
+		INNER JOIN programs p
+			ON p.university_id = u.id
+			AND regexp_replace(lower(trim(p.nama)), '\s+', ' ', 'g') = wanted.program_name
+	`, strings.Join(valueClauses, ", "))
 
 	matchedByLookup := make(map[RecommendationProgramLookup][]RecommendationProgramMatch, len(lookupSet))
+	rows, err := r.db.QueryContext(ctx, query, queryArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("find matching programs: %w", err)
+	}
+	defer rows.Close()
+
 	for rows.Next() {
 		var match RecommendationProgramMatch
-		if err := rows.Scan(&match.ProgramID, &match.ProgramName, &match.UniversityName); err != nil {
+		var normalizedUniversity string
+		var normalizedProgram string
+		if err := rows.Scan(&match.ProgramID, &match.ProgramName, &match.UniversityName, &normalizedUniversity, &normalizedProgram); err != nil {
 			return nil, fmt.Errorf("scan matching program: %w", err)
 		}
 
 		key := RecommendationProgramLookup{
-			UniversityName: normalizeRecommendationLookupValue(match.UniversityName),
-			ProgramName:    normalizeRecommendationLookupValue(match.ProgramName),
-		}
-		if _, ok := lookupSet[key]; !ok {
-			continue
+			UniversityName: normalizedUniversity,
+			ProgramName:    normalizedProgram,
 		}
 		matchedByLookup[key] = append(matchedByLookup[key], match)
 	}
@@ -322,6 +370,162 @@ func (r *DBRecommendationRepository) FindMatchingPrograms(ctx context.Context, l
 			continue
 		}
 		matches = append(matches, candidates[0])
+	}
+
+	return matches, nil
+}
+
+func (r *DBRecommendationRepository) ListRecommendationCountryCodes(ctx context.Context) ([]string, error) {
+	query := `
+		SELECT DISTINCT NULLIF(TRIM(negara_id), '')
+		FROM universities
+		WHERE NULLIF(TRIM(negara_id), '') IS NOT NULL
+		ORDER BY 1
+	`
+
+	rows, err := r.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("list recommendation country codes: %w", err)
+	}
+	defer rows.Close()
+
+	codes := make([]string, 0)
+	for rows.Next() {
+		var code string
+		if err := rows.Scan(&code); err != nil {
+			return nil, fmt.Errorf("scan recommendation country code: %w", err)
+		}
+		codes = append(codes, strings.TrimSpace(code))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate recommendation country codes: %w", err)
+	}
+
+	return codes, nil
+}
+
+func (r *DBRecommendationRepository) FindRecommendationAllowedCandidates(
+	ctx context.Context,
+	preferredCountryCodes []string,
+	limit int,
+) ([]RecommendationAllowedCandidate, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+
+	args := make([]any, 0, len(preferredCountryCodes)+1)
+	orderByPreference := "1"
+	if len(preferredCountryCodes) > 0 {
+		placeholders := make([]string, 0, len(preferredCountryCodes))
+		for idx, code := range preferredCountryCodes {
+			args = append(args, code)
+			placeholders = append(placeholders, fmt.Sprintf("$%d", idx+1))
+		}
+		orderByPreference = fmt.Sprintf("CASE WHEN u.negara_id IN (%s) THEN 0 ELSE 1 END", strings.Join(placeholders, ", "))
+	}
+
+	args = append(args, limit)
+	limitPlaceholder := fmt.Sprintf("$%d", len(args))
+
+	query := fmt.Sprintf(`
+		SELECT
+			p.program_id,
+			p.nama,
+			u.nama,
+			u.negara_id,
+			COALESCE(ap.website_url, ''),
+			COALESCE(u.website, '')
+		FROM programs p
+		INNER JOIN universities u ON u.id = p.university_id
+		LEFT JOIN LATERAL (
+			SELECT ap.website_url, ap.deadline
+			FROM admission_paths ap
+			WHERE ap.program_id = p.program_id
+			ORDER BY ap.deadline ASC NULLS LAST, ap.admission_id ASC
+			LIMIT 1
+		) ap ON TRUE
+		ORDER BY
+			%s,
+			COALESCE(u.ranking, 2147483647),
+			ap.deadline ASC NULLS LAST,
+			p.program_id ASC
+		LIMIT %s
+	`, orderByPreference, limitPlaceholder)
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("find recommendation allowed candidates: %w", err)
+	}
+	defer rows.Close()
+
+	candidates := make([]RecommendationAllowedCandidate, 0, limit)
+	for rows.Next() {
+		var candidate RecommendationAllowedCandidate
+		if err := rows.Scan(
+			&candidate.ProgramID,
+			&candidate.ProgramName,
+			&candidate.UniversityName,
+			&candidate.CountryCode,
+			&candidate.OfficialProgramURL,
+			&candidate.OfficialUniversityURL,
+		); err != nil {
+			return nil, fmt.Errorf("scan recommendation allowed candidate: %w", err)
+		}
+		candidates = append(candidates, candidate)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate recommendation allowed candidates: %w", err)
+	}
+
+	return candidates, nil
+}
+
+func (r *DBRecommendationRepository) FindScholarshipMatches(ctx context.Context, programIDs []string) ([]RecommendationScholarshipMatch, error) {
+	if len(programIDs) == 0 {
+		return nil, nil
+	}
+
+	args := make([]any, 0, len(programIDs))
+	placeholders := make([]string, 0, len(programIDs))
+	for idx, programID := range programIDs {
+		args = append(args, programID)
+		placeholders = append(placeholders, fmt.Sprintf("$%d", idx+1))
+	}
+
+	query := fmt.Sprintf(`
+		SELECT
+			ap.program_id,
+			fo.nama_beasiswa,
+			fo.funding_id,
+			ap.admission_id
+		FROM admission_paths ap
+		INNER JOIN admission_funding af ON af.admission_id = ap.admission_id
+		INNER JOIN funding_options fo ON fo.funding_id = af.funding_id
+		WHERE ap.program_id IN (%s)
+		ORDER BY
+			ap.program_id ASC,
+			LOWER(fo.nama_beasiswa) ASC,
+			fo.funding_id ASC,
+			ap.deadline ASC NULLS LAST,
+			ap.admission_id ASC
+	`, strings.Join(placeholders, ", "))
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("find scholarship matches: %w", err)
+	}
+	defer rows.Close()
+
+	matches := make([]RecommendationScholarshipMatch, 0)
+	for rows.Next() {
+		var match RecommendationScholarshipMatch
+		if err := rows.Scan(&match.ProgramID, &match.ScholarshipName, &match.FundingID, &match.AdmissionID); err != nil {
+			return nil, fmt.Errorf("scan scholarship match: %w", err)
+		}
+		matches = append(matches, match)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate scholarship matches: %w", err)
 	}
 
 	return matches, nil
@@ -430,8 +634,9 @@ func (r *DBRecommendationRepository) FindSubmissionDetail(ctx context.Context, s
 
 	resultsQuery := `
 		SELECT rr.rec_result_id, rr.result_set_id, rr.program_id, ap.admission_id, rr.rank_no, rr.university_name, rr.program_name, rr.country,
-		       rr.fit_score, COALESCE(rr.score, 0), rr.fit_level, rr.overview, rr.why_this_university, rr.why_this_program,
-		       rr.reason_summary, rr.pros_json, rr.cons_json, rr.created_at
+		       rr.fit_score, rr.admission_chance_score, rr.overall_recommendation_score, rr.fit_level, rr.admission_difficulty,
+		       rr.score_breakdown_json, rr.overview, rr.why_this_university, rr.why_this_program, rr.preference_reasoning_json,
+		       rr.match_evidence_json, rr.scholarship_recommendations_json, rr.reason_summary, rr.pros_json, rr.cons_json, rr.created_at
 		FROM recommendation_results rr
 		LEFT JOIN LATERAL (
 			SELECT admission_id
@@ -463,11 +668,17 @@ func (r *DBRecommendationRepository) FindSubmissionDetail(ctx context.Context, s
 			&row.ProgramName,
 			&row.Country,
 			&row.FitScore,
+			&row.AdmissionChanceScore,
 			&row.OverallRecommendationScore,
 			&row.FitLevel,
+			&row.AdmissionDifficulty,
+			&row.ScoreBreakdownJSON,
 			&row.Overview,
 			&row.WhyThisUniversity,
 			&row.WhyThisProgram,
+			&row.PreferenceReasoningJSON,
+			&row.MatchEvidenceJSON,
+			&row.ScholarshipRecommendationsJSON,
 			&row.ReasonSummary,
 			&row.ProsJSON,
 			&row.ConsJSON,
