@@ -248,9 +248,13 @@ func TestFindDocumentByIDAndUserRepository(t *testing.T) {
 
 func TestCreateResultSetRepositorySuccess(t *testing.T) {
 	execCount := 0
+	var insertResultArgs []driver.NamedValue
 	db := newFakeRecDB(t, &fakeRecDBBehavior{
 		execFn: func(query string, args []driver.NamedValue) (driver.Result, error) {
 			execCount++
+			if strings.Contains(query, "INSERT INTO recommendation_results") {
+				insertResultArgs = append([]driver.NamedValue(nil), args...)
+			}
 			return fakeRecResult{affected: 1}, nil
 		},
 		queryFn: func(query string, args []driver.NamedValue) (driver.Rows, error) {
@@ -267,21 +271,30 @@ func TestCreateResultSetRepositorySuccess(t *testing.T) {
 	now := time.Now().UTC()
 
 	set, err := repo.CreateResultSet(context.Background(), "submission-1", now, []model.RecommendationResult{{
-		RecResultID:       "res-1",
-		ResultSetID:       "set-1",
-		RankNo:            1,
-		UniversityName:    "University A",
-		ProgramName:       "CS",
-		Country:           "Japan",
-		FitScore:          90,
-		FitLevel:          "high",
-		Overview:          "overview",
-		WhyThisUniversity: "why",
-		WhyThisProgram:    "why program",
-		ReasonSummary:     "summary",
-		ProsJSON:          `["pro"]`,
-		ConsJSON:          `["con"]`,
-		CreatedAt:         now,
+		RecResultID:                    "res-1",
+		ResultSetID:                    "set-1",
+		ProgramID:                      stringPtr("program-1"),
+		RankNo:                         1,
+		UniversityName:                 "University A",
+		ProgramName:                    "CS",
+		Country:                        "Japan",
+		FitScore:                       90,
+		AdmissionChanceScore:           84,
+		OverallRecommendationScore:     88,
+		FitLevel:                       "high",
+		AdmissionDifficulty:            "moderate",
+		ScoreBreakdownJSON:             `{"academic_fit":90}`,
+		Overview:                       "overview",
+		WhyThisUniversity:              "why",
+		WhyThisProgram:                 "why program",
+		PreferenceReasoningJSON:        `["reason"]`,
+		MatchEvidenceJSON:              `["evidence"]`,
+		ScholarshipRecommendationsJSON: `[{"scholarship_name":"MEXT","funding_id":"fund-1"}]`,
+		ReasonSummary:                  "summary",
+		ProsJSON:                       `["pro"]`,
+		ConsJSON:                       `["con"]`,
+		RawRecommendationJSON:          `{"rank":1}`,
+		CreatedAt:                      now,
 	}})
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
@@ -291,6 +304,12 @@ func TestCreateResultSetRepositorySuccess(t *testing.T) {
 	}
 	if execCount != 2 {
 		t.Fatalf("expected 2 execs, got %d", execCount)
+	}
+	if len(insertResultArgs) != 24 {
+		t.Fatalf("expected 24 insert args for expanded result payload, got %d", len(insertResultArgs))
+	}
+	if got := insertResultArgs[18].Value; got != `[{"scholarship_name":"MEXT","funding_id":"fund-1"}]` {
+		t.Fatalf("expected scholarship payload to be persisted, got %#v", got)
 	}
 }
 
@@ -330,9 +349,9 @@ func TestFindSubmissionDetailRepositorySuccess(t *testing.T) {
 				}, nil
 			case strings.Contains(query, "FROM recommendation_results"):
 				return &fakeRecRows{
-					columns: []string{"rec_result_id", "result_set_id", "program_id", "admission_id", "rank_no", "university_name", "program_name", "country", "fit_score", "score", "fit_level", "overview", "why_this_university", "why_this_program", "reason_summary", "pros_json", "cons_json", "created_at"},
+					columns: []string{"rec_result_id", "result_set_id", "program_id", "admission_id", "rank_no", "university_name", "program_name", "country", "fit_score", "admission_chance_score", "overall_recommendation_score", "fit_level", "admission_difficulty", "score_breakdown_json", "overview", "why_this_university", "why_this_program", "preference_reasoning_json", "match_evidence_json", "scholarship_recommendations_json", "reason_summary", "pros_json", "cons_json", "created_at"},
 					rows: [][]driver.Value{
-						{"res-1", "set-1", "program-1", "admission-1", int64(1), "University A", "CS", "Japan", int64(90), int64(88), "high", "overview", "why uni", "why program", "summary", `["pro"]`, `["con"]`, now},
+						{"res-1", "set-1", "program-1", "admission-1", int64(1), "University A", "CS", "Japan", int64(90), int64(76), int64(88), "high", "moderate", `{"academic_fit":90}`, "overview", "why uni", "why program", `["reason"]`, `["evidence"]`, `[{"scholarship_name":"MEXT","funding_id":"fund-1"}]`, "summary", `["pro"]`, `["con"]`, now},
 					},
 				}, nil
 			default:
@@ -358,4 +377,11 @@ func TestFindSubmissionDetailRepositorySuccess(t *testing.T) {
 	if detail.LatestResultSet == nil || len(detail.Results) != 1 {
 		t.Fatalf("expected result set and result, got %#v %#v", detail.LatestResultSet, detail.Results)
 	}
+	if detail.Results[0].ScholarshipRecommendationsJSON != `[{"scholarship_name":"MEXT","funding_id":"fund-1"}]` {
+		t.Fatalf("expected scholarship payload to round-trip, got %s", detail.Results[0].ScholarshipRecommendationsJSON)
+	}
+}
+
+func stringPtr(value string) *string {
+	return &value
 }

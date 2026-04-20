@@ -29,10 +29,13 @@ type fakeRecommendationRepo struct {
 	updatedStatuses        []model.RecommendationStatus
 	createdResultRows      []model.RecommendationResult
 
-	detail                  repository.SubmissionDetail
-	latestTranscriptDetail  repository.SubmissionDetail
-	findLatestTranscriptErr error
-	programMatches          []repository.RecommendationProgramMatch
+	detail                     repository.SubmissionDetail
+	latestTranscriptDetail     repository.SubmissionDetail
+	findLatestTranscriptErr    error
+	programMatches             []repository.RecommendationProgramMatch
+	recommendationCountryCodes []string
+	allowedCandidates          []repository.RecommendationAllowedCandidate
+	scholarshipMatches         []repository.RecommendationScholarshipMatch
 }
 
 func (f *fakeRecommendationRepo) CreateDocument(ctx context.Context, doc model.Document) (model.Document, error) {
@@ -87,6 +90,18 @@ func (f *fakeRecommendationRepo) FindMatchingPrograms(ctx context.Context, looku
 	return f.programMatches, nil
 }
 
+func (f *fakeRecommendationRepo) ListRecommendationCountryCodes(ctx context.Context) ([]string, error) {
+	return f.recommendationCountryCodes, nil
+}
+
+func (f *fakeRecommendationRepo) FindRecommendationAllowedCandidates(ctx context.Context, preferredCountryCodes []string, limit int) ([]repository.RecommendationAllowedCandidate, error) {
+	return f.allowedCandidates, nil
+}
+
+func (f *fakeRecommendationRepo) FindScholarshipMatches(ctx context.Context, programIDs []string) ([]repository.RecommendationScholarshipMatch, error) {
+	return f.scholarshipMatches, nil
+}
+
 func makeFileHeader(t *testing.T, fieldName, filename string, content []byte) *multipart.FileHeader {
 	t.Helper()
 	body := &bytes.Buffer{}
@@ -112,6 +127,10 @@ func makeFileHeader(t *testing.T, fieldName, filename string, content []byte) *m
 		t.Fatal("missing multipart file header")
 	}
 	return files[0]
+}
+
+func ptrString(value string) *string {
+	return &value
 }
 
 func TestCreateSubmissionServiceRejectsWhenNoDocument(t *testing.T) {
@@ -250,13 +269,17 @@ func TestUploadDocumentServiceAllowsSupportedExtensions(t *testing.T) {
 }
 
 type fakeRecommendationAIClient struct {
-	profileResponse    dto.GlobalMatchAIRecommendationResponse
-	transcriptResponse dto.GlobalMatchAIRecommendationResponse
-	cvResponse         dto.GlobalMatchAIRecommendationResponse
-	err                error
+	profileResponse       dto.GlobalMatchAIRecommendationResponse
+	transcriptResponse    dto.GlobalMatchAIRecommendationResponse
+	cvResponse            dto.GlobalMatchAIRecommendationResponse
+	err                   error
+	lastProfileRequest    dto.AIProfileRecommendationRequest
+	lastTranscriptRequest dto.AITranscriptRecommendationRequest
+	lastCVRequest         dto.AICVRecommendationRequest
 }
 
 func (f *fakeRecommendationAIClient) RecommendProfile(ctx context.Context, req dto.AIProfileRecommendationRequest) (dto.GlobalMatchAIRecommendationResponse, error) {
+	f.lastProfileRequest = req
 	if f.err != nil {
 		return dto.GlobalMatchAIRecommendationResponse{}, f.err
 	}
@@ -264,6 +287,7 @@ func (f *fakeRecommendationAIClient) RecommendProfile(ctx context.Context, req d
 }
 
 func (f *fakeRecommendationAIClient) RecommendTranscript(ctx context.Context, req dto.AITranscriptRecommendationRequest) (dto.GlobalMatchAIRecommendationResponse, error) {
+	f.lastTranscriptRequest = req
 	if f.err != nil {
 		return dto.GlobalMatchAIRecommendationResponse{}, f.err
 	}
@@ -271,6 +295,7 @@ func (f *fakeRecommendationAIClient) RecommendTranscript(ctx context.Context, re
 }
 
 func (f *fakeRecommendationAIClient) RecommendCV(ctx context.Context, req dto.AICVRecommendationRequest) (dto.GlobalMatchAIRecommendationResponse, error) {
+	f.lastCVRequest = req
 	if f.err != nil {
 		return dto.GlobalMatchAIRecommendationResponse{}, f.err
 	}
@@ -286,12 +311,22 @@ func TestCreateProfileRecommendationServiceSuccess(t *testing.T) {
 		ProgramName:    "Computer Science",
 		ProgramID:      "program-university-a-cs",
 	}}
+	repo.recommendationCountryCodes = []string{"JP", "SG"}
+	repo.allowedCandidates = []repository.RecommendationAllowedCandidate{{
+		ProgramID:             "program-university-a-cs",
+		ProgramName:           "Computer Science",
+		UniversityName:        "University A",
+		CountryCode:           "JP",
+		OfficialProgramURL:    "https://unia.example/cs",
+		OfficialUniversityURL: "https://unia.example",
+	}}
 	aiClient := &fakeRecommendationAIClient{
 		profileResponse: dto.GlobalMatchAIRecommendationResponse{
 			SelectionReasoning: "strong fit",
 			TopRecommendations: []dto.GlobalMatchAITopRecommendationResponse{
 				{
 					Rank:                       1,
+					ProgramID:                  ptrString("program-university-a-cs"),
 					UniversityName:             "University A",
 					ProgramName:                "Computer Science",
 					Country:                    "Japan",
@@ -341,6 +376,12 @@ func TestCreateProfileRecommendationServiceSuccess(t *testing.T) {
 	}
 	if out.Result.TopRecommendations[0].ProgramID == nil || *out.Result.TopRecommendations[0].ProgramID != "program-university-a-cs" {
 		t.Fatalf("expected response program_id, got %#v", out.Result.TopRecommendations[0].ProgramID)
+	}
+	if len(aiClient.lastProfileRequest.AllowedCandidates) != 1 {
+		t.Fatalf("expected allowed candidates to be forwarded, got %#v", aiClient.lastProfileRequest.AllowedCandidates)
+	}
+	if aiClient.lastProfileRequest.AllowedCandidates[0].Country != "Japan" {
+		t.Fatalf("expected country code to be converted to display name, got %#v", aiClient.lastProfileRequest.AllowedCandidates[0])
 	}
 	if len(repo.createSubmissionParams.Preferences) != 2 {
 		t.Fatalf("expected flattened preferences, got %d", len(repo.createSubmissionParams.Preferences))
@@ -444,12 +485,22 @@ func TestCreateCVRecommendationServiceSuccess(t *testing.T) {
 			ProgramName:    "Data Science",
 			ProgramID:      "program-university-c-data-science",
 		}},
+		recommendationCountryCodes: []string{"SG"},
+		allowedCandidates: []repository.RecommendationAllowedCandidate{{
+			ProgramID:             "program-university-c-data-science",
+			ProgramName:           "Data Science",
+			UniversityName:        "University C",
+			CountryCode:           "SG",
+			OfficialProgramURL:    "https://unic.example/data-science",
+			OfficialUniversityURL: "https://unic.example",
+		}},
 	}
 	aiClient := &fakeRecommendationAIClient{
 		cvResponse: dto.GlobalMatchAIRecommendationResponse{
 			SelectionReasoning: "cv fit",
 			TopRecommendations: []dto.GlobalMatchAITopRecommendationResponse{{
 				Rank:                       1,
+				ProgramID:                  ptrString("program-university-c-data-science"),
 				UniversityName:             "University C",
 				ProgramName:                "Data Science",
 				Country:                    "Singapore",
@@ -474,6 +525,315 @@ func TestCreateCVRecommendationServiceSuccess(t *testing.T) {
 	}
 	if out.Status != model.RecommendationStatusCompleted {
 		t.Fatalf("expected completed, got %s", out.Status)
+	}
+	if len(aiClient.lastCVRequest.AllowedCandidates) != 1 {
+		t.Fatalf("expected allowed candidates to be forwarded, got %#v", aiClient.lastCVRequest.AllowedCandidates)
+	}
+}
+
+func TestCreateProfileRecommendationServiceResolvesScholarshipLinks(t *testing.T) {
+	repo := &fakeRecommendationRepo{
+		recommendationCountryCodes: []string{"JP"},
+		allowedCandidates: []repository.RecommendationAllowedCandidate{{
+			ProgramID:             "program-a",
+			ProgramName:           "Computer Science",
+			UniversityName:        "University A",
+			CountryCode:           "JP",
+			OfficialProgramURL:    "https://unia.example/cs",
+			OfficialUniversityURL: "https://unia.example",
+		}},
+		scholarshipMatches: []repository.RecommendationScholarshipMatch{{
+			ProgramID:       "program-a",
+			ScholarshipName: "JASSO Scholarship",
+			FundingID:       "funding-1",
+			AdmissionID:     "admission-1",
+		}},
+	}
+	aiClient := &fakeRecommendationAIClient{
+		profileResponse: dto.GlobalMatchAIRecommendationResponse{
+			TopRecommendations: []dto.GlobalMatchAITopRecommendationResponse{{
+				Rank:              1,
+				ProgramID:         ptrString("program-a"),
+				UniversityName:    "University A",
+				ProgramName:       "Computer Science",
+				Country:           "Japan",
+				FitScore:          90,
+				FitLevel:          "high",
+				Overview:          "overview",
+				WhyThisUniversity: "why university",
+				WhyThisProgram:    "why program",
+				ScholarshipRecommendations: []dto.GlobalMatchAIScholarshipRecommendationResponse{{
+					ScholarshipName: "JASSO Scholarship",
+					CoverageSummary: "partial support",
+					Selectivity:     "moderate",
+					EligibilityHint: "international student",
+				}},
+			}},
+		},
+	}
+	svc := service.NewRecommendationServiceWithDeps(repo, service.NewLocalDocumentStorage(t.TempDir(), ""), aiClient)
+
+	out, err := svc.CreateProfileRecommendation(context.Background(), "user-1", dto.CreateProfileRecommendationRequest{
+		TranscriptFile: makeFileHeader(t, "transcript_file", "transcript.pdf", []byte("%PDF-1.7 transcript")),
+		CVFile:         makeFileHeader(t, "cv_file", "cv.pdf", []byte("%PDF-1.7 cv")),
+		RecommendationPreferenceInput: dto.RecommendationPreferenceInput{
+			Countries: []string{"Japan"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if out.Result == nil || len(out.Result.TopRecommendations) != 1 {
+		t.Fatalf("expected recommendation result, got %#v", out.Result)
+	}
+	scholarships := out.Result.TopRecommendations[0].ScholarshipRecommendations
+	if len(scholarships) != 1 {
+		t.Fatalf("expected one scholarship, got %#v", scholarships)
+	}
+	if scholarships[0].FundingID == nil || *scholarships[0].FundingID != "funding-1" {
+		t.Fatalf("expected funding_id to be resolved, got %#v", scholarships[0].FundingID)
+	}
+	if scholarships[0].AdmissionID == nil || *scholarships[0].AdmissionID != "admission-1" {
+		t.Fatalf("expected admission_id to be resolved, got %#v", scholarships[0].AdmissionID)
+	}
+}
+
+func TestCreateProfileRecommendationServiceResolvesScholarshipLinksWhenFundingMatchesButAdmissionsDiffer(t *testing.T) {
+	repo := &fakeRecommendationRepo{
+		recommendationCountryCodes: []string{"JP"},
+		allowedCandidates: []repository.RecommendationAllowedCandidate{{
+			ProgramID:             "program-a",
+			ProgramName:           "Computer Science",
+			UniversityName:        "University A",
+			CountryCode:           "JP",
+			OfficialProgramURL:    "https://unia.example/cs",
+			OfficialUniversityURL: "https://unia.example",
+		}},
+		scholarshipMatches: []repository.RecommendationScholarshipMatch{
+			{
+				ProgramID:       "program-a",
+				ScholarshipName: "JASSO Scholarship",
+				FundingID:       "funding-1",
+				AdmissionID:     "admission-1",
+			},
+			{
+				ProgramID:       "program-a",
+				ScholarshipName: "JASSO Scholarship",
+				FundingID:       "funding-1",
+				AdmissionID:     "admission-2",
+			},
+		},
+	}
+	aiClient := &fakeRecommendationAIClient{
+		profileResponse: dto.GlobalMatchAIRecommendationResponse{
+			TopRecommendations: []dto.GlobalMatchAITopRecommendationResponse{{
+				Rank:              1,
+				ProgramID:         ptrString("program-a"),
+				UniversityName:    "University A",
+				ProgramName:       "Computer Science",
+				Country:           "Japan",
+				FitScore:          90,
+				FitLevel:          "high",
+				Overview:          "overview",
+				WhyThisUniversity: "why university",
+				WhyThisProgram:    "why program",
+				ScholarshipRecommendations: []dto.GlobalMatchAIScholarshipRecommendationResponse{{
+					ScholarshipName: "JASSO Scholarship",
+					CoverageSummary: "partial support",
+					Selectivity:     "moderate",
+					EligibilityHint: "international student",
+				}},
+			}},
+		},
+	}
+	svc := service.NewRecommendationServiceWithDeps(repo, service.NewLocalDocumentStorage(t.TempDir(), ""), aiClient)
+
+	out, err := svc.CreateProfileRecommendation(context.Background(), "user-1", dto.CreateProfileRecommendationRequest{
+		TranscriptFile: makeFileHeader(t, "transcript_file", "transcript.pdf", []byte("%PDF-1.7 transcript")),
+		CVFile:         makeFileHeader(t, "cv_file", "cv.pdf", []byte("%PDF-1.7 cv")),
+		RecommendationPreferenceInput: dto.RecommendationPreferenceInput{
+			Countries: []string{"Japan"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if out.Result == nil || len(out.Result.TopRecommendations) != 1 {
+		t.Fatalf("expected recommendation result, got %#v", out.Result)
+	}
+	scholarships := out.Result.TopRecommendations[0].ScholarshipRecommendations
+	if len(scholarships) != 1 {
+		t.Fatalf("expected one scholarship, got %#v", scholarships)
+	}
+	if scholarships[0].FundingID == nil || *scholarships[0].FundingID != "funding-1" {
+		t.Fatalf("expected funding_id to be resolved, got %#v", scholarships[0].FundingID)
+	}
+	if scholarships[0].AdmissionID == nil || *scholarships[0].AdmissionID != "admission-1" {
+		t.Fatalf("expected first admission_id to be resolved deterministically, got %#v", scholarships[0].AdmissionID)
+	}
+}
+
+func TestCreateProfileRecommendationServiceFallsBackToOtherCountriesWhenPreferredOnlyOne(t *testing.T) {
+	repo := &fakeRecommendationRepo{
+		programMatches: []repository.RecommendationProgramMatch{
+			{
+				UniversityName: "University A",
+				ProgramName:    "Computer Science",
+				ProgramID:      "program-a",
+			},
+			{
+				UniversityName: "University B",
+				ProgramName:    "Computer Science",
+				ProgramID:      "program-b",
+			},
+			{
+				UniversityName: "University C",
+				ProgramName:    "Computer Science",
+				ProgramID:      "program-c",
+			},
+		},
+	}
+	aiClient := &fakeRecommendationAIClient{
+		profileResponse: dto.GlobalMatchAIRecommendationResponse{
+			TopRecommendations: []dto.GlobalMatchAITopRecommendationResponse{
+				{
+					Rank:              1,
+					UniversityName:    "University B",
+					ProgramName:       "Computer Science",
+					Country:           "Singapore",
+					FitScore:          87,
+					FitLevel:          "high",
+					Overview:          "overview",
+					WhyThisUniversity: "why university",
+					WhyThisProgram:    "why program",
+				},
+				{
+					Rank:              2,
+					UniversityName:    "University A",
+					ProgramName:       "Computer Science",
+					Country:           "Japan",
+					FitScore:          90,
+					FitLevel:          "high",
+					Overview:          "overview",
+					WhyThisUniversity: "why university",
+					WhyThisProgram:    "why program",
+				},
+				{
+					Rank:              3,
+					UniversityName:    "University C",
+					ProgramName:       "Computer Science",
+					Country:           "Australia",
+					FitScore:          84,
+					FitLevel:          "high",
+					Overview:          "overview",
+					WhyThisUniversity: "why university",
+					WhyThisProgram:    "why program",
+				},
+			},
+		},
+	}
+	svc := service.NewRecommendationServiceWithDeps(repo, service.NewLocalDocumentStorage(t.TempDir(), ""), aiClient)
+
+	out, err := svc.CreateProfileRecommendation(context.Background(), "user-1", dto.CreateProfileRecommendationRequest{
+		TranscriptFile: makeFileHeader(t, "transcript_file", "transcript.pdf", []byte("%PDF-1.7 transcript")),
+		CVFile:         makeFileHeader(t, "cv_file", "cv.pdf", []byte("%PDF-1.7 cv")),
+		RecommendationPreferenceInput: dto.RecommendationPreferenceInput{
+			Countries: []string{"Japan"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if out.Result == nil || len(out.Result.TopRecommendations) != 3 {
+		t.Fatalf("expected three recommendations, got %#v", out.Result)
+	}
+	if out.Result.TopRecommendations[0].Country != "Japan" {
+		t.Fatalf("expected preferred country first, got %#v", out.Result.TopRecommendations)
+	}
+	if out.Result.TopRecommendations[1].Country == "Japan" {
+		t.Fatalf("expected fallback from other countries after preferred result, got %#v", out.Result.TopRecommendations)
+	}
+	if out.Result.TopRecommendations[0].Rank != 1 || out.Result.TopRecommendations[1].Rank != 2 || out.Result.TopRecommendations[2].Rank != 3 {
+		t.Fatalf("expected ranks to be recomputed, got %#v", out.Result.TopRecommendations)
+	}
+}
+
+func TestCreateProfileRecommendationServiceKeepsPreferredCountriesAheadWhenMultipleMatches(t *testing.T) {
+	repo := &fakeRecommendationRepo{
+		programMatches: []repository.RecommendationProgramMatch{
+			{
+				UniversityName: "University A",
+				ProgramName:    "Computer Science",
+				ProgramID:      "program-a",
+			},
+			{
+				UniversityName: "University B",
+				ProgramName:    "Computer Science",
+				ProgramID:      "program-b",
+			},
+			{
+				UniversityName: "University C",
+				ProgramName:    "Computer Science",
+				ProgramID:      "program-c",
+			},
+		},
+	}
+	aiClient := &fakeRecommendationAIClient{
+		profileResponse: dto.GlobalMatchAIRecommendationResponse{
+			TopRecommendations: []dto.GlobalMatchAITopRecommendationResponse{
+				{
+					Rank:              1,
+					UniversityName:    "University C",
+					ProgramName:       "Computer Science",
+					Country:           "Singapore",
+					FitScore:          84,
+					FitLevel:          "high",
+					Overview:          "overview",
+					WhyThisUniversity: "why university",
+					WhyThisProgram:    "why program",
+				},
+				{
+					Rank:              2,
+					UniversityName:    "University A",
+					ProgramName:       "Computer Science",
+					Country:           "Japan",
+					FitScore:          90,
+					FitLevel:          "high",
+					Overview:          "overview",
+					WhyThisUniversity: "why university",
+					WhyThisProgram:    "why program",
+				},
+				{
+					Rank:              3,
+					UniversityName:    "University B",
+					ProgramName:       "Computer Science",
+					Country:           "Japan",
+					FitScore:          88,
+					FitLevel:          "high",
+					Overview:          "overview",
+					WhyThisUniversity: "why university",
+					WhyThisProgram:    "why program",
+				},
+			},
+		},
+	}
+	svc := service.NewRecommendationServiceWithDeps(repo, service.NewLocalDocumentStorage(t.TempDir(), ""), aiClient)
+
+	out, err := svc.CreateProfileRecommendation(context.Background(), "user-1", dto.CreateProfileRecommendationRequest{
+		TranscriptFile: makeFileHeader(t, "transcript_file", "transcript.pdf", []byte("%PDF-1.7 transcript")),
+		CVFile:         makeFileHeader(t, "cv_file", "cv.pdf", []byte("%PDF-1.7 cv")),
+		RecommendationPreferenceInput: dto.RecommendationPreferenceInput{
+			Countries: []string{"Japan"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if out.Result == nil || len(out.Result.TopRecommendations) != 3 {
+		t.Fatalf("expected three recommendations, got %#v", out.Result)
+	}
+	if out.Result.TopRecommendations[0].Country != "Japan" || out.Result.TopRecommendations[1].Country != "Japan" {
+		t.Fatalf("expected preferred-country recommendations to stay ahead, got %#v", out.Result.TopRecommendations)
 	}
 }
 
