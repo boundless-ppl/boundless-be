@@ -226,6 +226,39 @@ func TestValidateAccessTokenRejectRefreshService(t *testing.T) {
 	}
 }
 
+func TestRefreshAccessSuccessService(t *testing.T) {
+	userRepo := newTestUserRepoService()
+	authService := service.NewAuthService(userRepo)
+
+	if err := authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", "Secret123!"); err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	tokens, err := authService.Login(context.Background(), "alice@example.com", "Secret123!")
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+
+	access, err := authService.RefreshAccess(tokens.RefreshToken)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if access == "" {
+		t.Fatal("expected non-empty refreshed access token")
+	}
+	if _, err := authService.ValidateAccessToken(access); err != nil {
+		t.Fatalf("expected refreshed access token to be valid, got %v", err)
+	}
+}
+
+func TestRefreshAccessRejectsInvalidTokenService(t *testing.T) {
+	userRepo := newTestUserRepoService()
+	authService := service.NewAuthService(userRepo)
+
+	if _, err := authService.RefreshAccess("bad.token"); !errors.Is(err, service.ErrInvalidToken) {
+		t.Fatalf("expected %v, got %v", service.ErrInvalidToken, err)
+	}
+}
+
 func TestValidateAccessTokenExpiredService(t *testing.T) {
 	userRepo := newTestUserRepoService()
 	authService := service.NewAuthService(userRepo)

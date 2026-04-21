@@ -108,7 +108,7 @@ func TestHTTPRecommendationAIClientRoutesEachModeToExpectedEndpoint(t *testing.T
 				w.Header().Set("Content-Type", "application/json")
 				_ = json.NewEncoder(w).Encode(dto.GlobalMatchAIRecommendationResponse{
 					StudentProfileSummary: dto.GlobalMatchAIStudentProfileSummaryResponse{
-						RawText: "summary",
+						AcademicBackground: "summary",
 					},
 					TopRecommendations: []dto.GlobalMatchAITopRecommendationResponse{
 						{

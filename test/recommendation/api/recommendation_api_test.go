@@ -216,7 +216,7 @@ func TestCreateTranscriptRecommendationAPI(t *testing.T) {
 	aiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
-			"student_profile_summary":{"academic_background":"strong","experience_summary":"good","strengths":["analysis"],"improvement_areas":[],"preferred_themes":[],"raw_text":"summary"},
+			"student_profile_summary":{"academic_background":"strong","key_strengths":["analysis"],"considerations":[],"recommended_tracks":[],"language_evidence":"not_available"},
 			"top_recommendations":[
 				{
 					"rank":1,
