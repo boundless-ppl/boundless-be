@@ -1,13 +1,61 @@
 stages:
-  - sonar
+  - test
+  - quality
+  - deploy
+
+variables:
+  GOMODCACHE: "$CI_PROJECT_DIR/.cache/go/pkg/mod"
+  GOCACHE: "$CI_PROJECT_DIR/.cache/go-build"
+  GOFLAGS: "-mod=mod"
+
+.default-go-cache: &default-go-cache
+  cache:
+    key: "$CI_COMMIT_REF_SLUG-go"
+    paths:
+      - .cache/go/pkg/mod
+      - .cache/go-build
+
+unit_test:
+  stage: test
+  image: golang:1.24
+  <<: *default-go-cache
+  script:
+    - go version
+    - go test ./... -coverpkg=./... -coverprofile=coverage.out
+  artifacts:
+    when: always
+    expire_in: 7 days
+    paths:
+      - coverage.out
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "dev"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
 
 sonarcloud:
-  stage: sonar
+  stage: quality
   image: sonarsource/sonar-scanner-cli:latest
+  needs:
+    - unit_test
   variables:
     GIT_DEPTH: "0"
   script:
     - sonar-scanner -Dsonar.organization=boundless -Dsonar.projectKey=boundless_boundless-be
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$SONAR_TOKEN && $CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$SONAR_TOKEN && $CI_COMMIT_BRANCH == "main"'
+    - if: '$SONAR_TOKEN && $CI_COMMIT_BRANCH == "dev"'
+
+deploy_dev:
+  stage: deploy
+  image: google/cloud-sdk:slim
+  needs:
+    - unit_test
+  script:
+    - bash ci/deploy_dev.sh
+  environment:
+    name: development
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "dev" && $CI_PIPELINE_SOURCE == "push" && $GCP_PROJECT_ID && $GCP_REGION && $GCP_SERVICE_NAME_DEV && $GCP_SA_KEY_B64'
+      when: on_success
+    - when: never
