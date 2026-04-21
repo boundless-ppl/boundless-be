@@ -13,6 +13,7 @@ import (
 
 	"boundless-be/api"
 	"boundless-be/database"
+	"boundless-be/debug"
 	"boundless-be/repository"
 	"boundless-be/service"
 
@@ -83,6 +84,8 @@ func main() {
 			}()
 		}
 	}
+
+	debug.StartPprofServer(os.Getenv("PPROF_ADDR"))
 
 	port := os.Getenv("PORT")
 	if port == "" {

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"boundless-be/dto"
@@ -26,6 +27,13 @@ const (
 	MaxDocumentSizeBytes                int64 = 5 * 1024 * 1024
 	recommendationAllowedCandidateLimit       = 30
 )
+
+var copyBufPool = sync.Pool{
+	New: func() any {
+		buf := make([]byte, 32*1024)
+		return &buf
+	},
+}
 
 var allowedDocumentExtensions = map[string]struct{}{
 	".pdf":  {},

@@ -9,3 +9,4 @@ coverage.html
 /.scannerwork
 /.claude
 /scripts
+/.gocache_local

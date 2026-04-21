@@ -73,7 +73,9 @@ func (s *GCSDocumentStorage) Upload(ctx context.Context, input UploadInput) (Sto
 	}
 
 	limited := io.LimitReader(src, MaxDocumentSizeBytes+1)
-	copied, err := io.Copy(writer, limited)
+	bufPtr := copyBufPool.Get().(*[]byte)
+	copied, err := io.CopyBuffer(writer, limited, *bufPtr)
+	copyBufPool.Put(bufPtr)
 	if err != nil {
 		_ = writer.Close()
 		return StoredObject{}, fmt.Errorf("stream file to gcs: %w", err)
