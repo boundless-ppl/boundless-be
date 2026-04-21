@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -316,30 +317,42 @@ func (r *DBRecommendationRepository) FindMatchingPrograms(ctx context.Context, l
 		return nil, nil
 	}
 
-	queryArgs := make([]any, 0, len(lookupSet)*2)
-	valueClauses := make([]string, 0, len(lookupSet))
-	argIndex := 1
+	type recommendationLookupPayload struct {
+		UniversityName string `json:"university_name"`
+		ProgramName    string `json:"program_name"`
+	}
+	payload := make([]recommendationLookupPayload, 0, len(lookupSet))
 	for lookup := range lookupSet {
-		valueClauses = append(valueClauses, fmt.Sprintf("($%d, $%d)", argIndex, argIndex+1))
-		queryArgs = append(queryArgs, lookup.UniversityName, lookup.ProgramName)
-		argIndex += 2
+		payload = append(payload, recommendationLookupPayload{
+			UniversityName: lookup.UniversityName,
+			ProgramName:    lookup.ProgramName,
+		})
+	}
+	lookupJSON, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("marshal recommendation lookups: %w", err)
 	}
 
-	query := fmt.Sprintf(`
-		WITH wanted(university_name, program_name) AS (
-			VALUES %s
-		)
-		SELECT p.program_id, p.nama, u.nama, wanted.university_name, wanted.program_name
-		FROM wanted
-		INNER JOIN universities u
-			ON regexp_replace(lower(trim(u.nama)), '\s+', ' ', 'g') = wanted.university_name
-		INNER JOIN programs p
-			ON p.university_id = u.id
-			AND regexp_replace(lower(trim(p.nama)), '\s+', ' ', 'g') = wanted.program_name
-	`, strings.Join(valueClauses, ", "))
+	query := `
+			WITH wanted(university_name, program_name) AS (
+				SELECT DISTINCT
+					regexp_replace(lower(trim(item->>'university_name')), '\s+', ' ', 'g') AS university_name,
+					regexp_replace(lower(trim(item->>'program_name')), '\s+', ' ', 'g') AS program_name
+				FROM jsonb_array_elements($1::jsonb) AS item
+				WHERE NULLIF(trim(item->>'university_name'), '') IS NOT NULL
+				  AND NULLIF(trim(item->>'program_name'), '') IS NOT NULL
+			)
+			SELECT p.program_id, p.nama, u.nama, wanted.university_name, wanted.program_name
+			FROM wanted
+			INNER JOIN universities u
+				ON regexp_replace(lower(trim(u.nama)), '\s+', ' ', 'g') = wanted.university_name
+			INNER JOIN programs p
+				ON p.university_id = u.id
+				AND regexp_replace(lower(trim(p.nama)), '\s+', ' ', 'g') = wanted.program_name
+		`
 
 	matchedByLookup := make(map[RecommendationProgramLookup][]RecommendationProgramMatch, len(lookupSet))
-	rows, err := r.db.QueryContext(ctx, query, queryArgs...)
+	rows, err := r.db.QueryContext(ctx, query, string(lookupJSON))
 	if err != nil {
 		return nil, fmt.Errorf("find matching programs: %w", err)
 	}
@@ -413,24 +426,27 @@ func (r *DBRecommendationRepository) FindRecommendationAllowedCandidates(
 		return nil, nil
 	}
 
-	args := make([]any, 0, len(preferredCountryCodes)+1)
-	orderByPreference := "1"
-	if len(preferredCountryCodes) > 0 {
-		placeholders := make([]string, 0, len(preferredCountryCodes))
-		for idx, code := range preferredCountryCodes {
-			args = append(args, code)
-			placeholders = append(placeholders, fmt.Sprintf("$%d", idx+1))
+	filteredPreferredCodes := make([]string, 0, len(preferredCountryCodes))
+	for _, code := range preferredCountryCodes {
+		trimmed := strings.TrimSpace(code)
+		if trimmed == "" {
+			continue
 		}
-		orderByPreference = fmt.Sprintf("CASE WHEN u.negara_id IN (%s) THEN 0 ELSE 1 END", strings.Join(placeholders, ", "))
+		filteredPreferredCodes = append(filteredPreferredCodes, trimmed)
+	}
+	preferredCodesJSON, err := json.Marshal(filteredPreferredCodes)
+	if err != nil {
+		return nil, fmt.Errorf("marshal preferred country codes: %w", err)
 	}
 
-	args = append(args, limit)
-	limitPlaceholder := fmt.Sprintf("$%d", len(args))
-
-	query := fmt.Sprintf(`
-		SELECT
-			p.program_id,
-			p.nama,
+	query := `
+			WITH preferred_codes(code) AS (
+				SELECT value
+				FROM jsonb_array_elements_text($1::jsonb)
+			)
+			SELECT
+				p.program_id,
+				p.nama,
 			u.nama,
 			u.negara_id,
 			COALESCE(ap.website_url, ''),
@@ -442,17 +458,21 @@ func (r *DBRecommendationRepository) FindRecommendationAllowedCandidates(
 			FROM admission_paths ap
 			WHERE ap.program_id = p.program_id
 			ORDER BY ap.deadline ASC NULLS LAST, ap.admission_id ASC
-			LIMIT 1
-		) ap ON TRUE
-		ORDER BY
-			%s,
-			COALESCE(u.ranking, 2147483647),
-			ap.deadline ASC NULLS LAST,
-			p.program_id ASC
-		LIMIT %s
-	`, orderByPreference, limitPlaceholder)
+				LIMIT 1
+			) ap ON TRUE
+			ORDER BY
+				CASE WHEN EXISTS (
+					SELECT 1
+					FROM preferred_codes pc
+					WHERE pc.code = u.negara_id
+				) THEN 0 ELSE 1 END,
+				COALESCE(u.ranking, 2147483647),
+				ap.deadline ASC NULLS LAST,
+				p.program_id ASC
+			LIMIT $2
+		`
 
-	rows, err := r.db.QueryContext(ctx, query, args...)
+	rows, err := r.db.QueryContext(ctx, query, string(preferredCodesJSON), limit)
 	if err != nil {
 		return nil, fmt.Errorf("find recommendation allowed candidates: %w", err)
 	}
@@ -485,32 +505,44 @@ func (r *DBRecommendationRepository) FindScholarshipMatches(ctx context.Context,
 		return nil, nil
 	}
 
-	args := make([]any, 0, len(programIDs))
-	placeholders := make([]string, 0, len(programIDs))
-	for idx, programID := range programIDs {
-		args = append(args, programID)
-		placeholders = append(placeholders, fmt.Sprintf("$%d", idx+1))
+	filteredProgramIDs := make([]string, 0, len(programIDs))
+	for _, programID := range programIDs {
+		trimmed := strings.TrimSpace(programID)
+		if trimmed == "" {
+			continue
+		}
+		filteredProgramIDs = append(filteredProgramIDs, trimmed)
+	}
+	if len(filteredProgramIDs) == 0 {
+		return nil, nil
+	}
+	programIDsJSON, err := json.Marshal(filteredProgramIDs)
+	if err != nil {
+		return nil, fmt.Errorf("marshal program ids: %w", err)
 	}
 
-	query := fmt.Sprintf(`
-		SELECT
-			ap.program_id,
-			fo.nama_beasiswa,
+	query := `
+			SELECT
+				ap.program_id,
+				fo.nama_beasiswa,
 			fo.funding_id,
 			ap.admission_id
-		FROM admission_paths ap
-		INNER JOIN admission_funding af ON af.admission_id = ap.admission_id
-		INNER JOIN funding_options fo ON fo.funding_id = af.funding_id
-		WHERE ap.program_id IN (%s)
-		ORDER BY
-			ap.program_id ASC,
-			LOWER(fo.nama_beasiswa) ASC,
-			fo.funding_id ASC,
-			ap.deadline ASC NULLS LAST,
-			ap.admission_id ASC
-	`, strings.Join(placeholders, ", "))
+			FROM admission_paths ap
+			INNER JOIN admission_funding af ON af.admission_id = ap.admission_id
+			INNER JOIN funding_options fo ON fo.funding_id = af.funding_id
+			WHERE ap.program_id IN (
+				SELECT value
+				FROM jsonb_array_elements_text($1::jsonb)
+			)
+			ORDER BY
+				ap.program_id ASC,
+				LOWER(fo.nama_beasiswa) ASC,
+				fo.funding_id ASC,
+				ap.deadline ASC NULLS LAST,
+				ap.admission_id ASC
+		`
 
-	rows, err := r.db.QueryContext(ctx, query, args...)
+	rows, err := r.db.QueryContext(ctx, query, string(programIDsJSON))
 	if err != nil {
 		return nil, fmt.Errorf("find scholarship matches: %w", err)
 	}

@@ -37,11 +37,11 @@ type AIAllowedCandidate struct {
 
 type GlobalMatchAIStudentProfileSummaryResponse struct {
 	AcademicBackground string   `json:"academic_background"`
-	ExperienceSummary  string   `json:"experience_summary"`
-	Strengths          []string `json:"strengths"`
-	ImprovementAreas   []string `json:"improvement_areas"`
-	PreferredThemes    []string `json:"preferred_themes"`
-	RawText            string   `json:"raw_text"`
+	KeyStrengths       []string `json:"key_strengths"`
+	Considerations     []string `json:"considerations"`
+	RecommendedTracks  []string `json:"recommended_tracks"`
+	LanguageEvidence   string   `json:"language_evidence"`
+	EvidenceConfidence string   `json:"evidence_confidence"`
 }
 
 type GlobalMatchAIScoreBreakdownResponse struct {
