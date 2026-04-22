@@ -288,7 +288,8 @@ func TestListAdminPaymentsRepository(t *testing.T) {
 	db := newFakeDB(t, &fakeBehavior{queryFn: func(query string, args []driver.NamedValue) (driver.Rows, error) {
 		proofID := "doc-1"
 		proofURL := "http://local/doc-1"
-		return &fakeRows{columns: []string{"payment_id", "transaction_id", "user_id", "nama_lengkap", "package_name_snapshot", "price_amount_snapshot", "normal_amount", "status", "created_at", "proof_document_id", "public_url"}, rows: [][]driver.Value{{"pay-1", "tx-1", "user-1", "Alice", "The Scholar", int64(100), int64(1000), "pending", now, proofID, proofURL}}}, nil
+		expiredAt := now.Add(24 * time.Hour)
+		return &fakeRows{columns: []string{"payment_id", "transaction_id", "user_id", "nama_lengkap", "email", "package_name_snapshot", "price_amount_snapshot", "normal_amount", "status", "created_at", "expired_at", "proof_document_id", "public_url"}, rows: [][]driver.Value{{"pay-1", "tx-1", "user-1", "Alice", "alice@example.com", "The Scholar", int64(100), int64(1000), "pending", now, expiredAt, proofID, proofURL}}}, nil
 	}})
 	repo := repository.NewPaymentRepository(db)
 
@@ -298,6 +299,12 @@ func TestListAdminPaymentsRepository(t *testing.T) {
 	}
 	if len(items) != 1 || items[0].PaymentID != "pay-1" {
 		t.Fatalf("unexpected items: %+v", items)
+	}
+	if items[0].UserEmail != "alice@example.com" {
+		t.Fatalf("expected user email alice@example.com, got %s", items[0].UserEmail)
+	}
+	if items[0].ExpiredAt.IsZero() {
+		t.Fatalf("expected expired_at to be populated")
 	}
 }
 
