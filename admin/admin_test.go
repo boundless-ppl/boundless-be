@@ -55,6 +55,42 @@ func TestLoadSuperuserCredentialsRejectsAdminAdmin(t *testing.T) {
 	}
 }
 
+func TestLoadSuperuserCredentialsRejectsInvalidEmail(t *testing.T) {
+	env := func(key string) string {
+		switch key {
+		case "SUPERUSER_EMAIL":
+			return "not-an-email"
+		case "SUPERUSER_PASSWORD":
+			return "StrongPass123!"
+		default:
+			return ""
+		}
+	}
+
+	_, _, err := loadSuperuserCredentials(env)
+	if err == nil {
+		t.Fatal("expected error for invalid superuser email")
+	}
+}
+
+func TestLoadSuperuserCredentialsRejectsWeakPassword(t *testing.T) {
+	env := func(key string) string {
+		switch key {
+		case "SUPERUSER_EMAIL":
+			return "admin@example.com"
+		case "SUPERUSER_PASSWORD":
+			return "weakpass"
+		default:
+			return ""
+		}
+	}
+
+	_, _, err := loadSuperuserCredentials(env)
+	if err == nil {
+		t.Fatal("expected error for weak superuser password")
+	}
+}
+
 func TestIsPaymentPanelTable(t *testing.T) {
 	if !isPaymentPanelTable("subscriptions") {
 		t.Fatal("expected subscriptions to be payment panel table")
