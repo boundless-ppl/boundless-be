@@ -28,11 +28,13 @@ type AdminPaymentItem struct {
 	TransactionID    string
 	UserID           string
 	UserName         string
+	UserEmail        string
 	PackageName      string
 	Amount           int64
 	NormalAmount     int64
 	Status           model.PaymentStatus
 	TransactionAt    time.Time
+	ExpiredAt        time.Time
 	ProofDocumentID  *string
 	ProofDocumentURL *string
 }
@@ -386,10 +388,10 @@ func (r *DBPaymentRepository) FindCurrentPremiumSubscription(ctx context.Context
 
 func (r *DBPaymentRepository) ListAdminPayments(ctx context.Context, params PaymentListParams) ([]AdminPaymentItem, error) {
 	query := `
-		SELECT p.payment_id, p.transaction_id, p.user_id, u.nama_lengkap,
+		SELECT p.payment_id, p.transaction_id, p.user_id, u.nama_lengkap, u.email,
 		       p.package_name_snapshot, p.price_amount_snapshot,
 		       COALESCE(p.normal_price_snapshot, p.price_amount_snapshot * 10, p.price_amount_snapshot) AS normal_amount,
-		       p.status, p.created_at,
+		       p.status, p.created_at, p.expired_at,
 		       p.proof_document_id, d.public_url
 		FROM payments p
 		JOIN users u ON u.user_id = p.user_id
@@ -421,11 +423,13 @@ func (r *DBPaymentRepository) ListAdminPayments(ctx context.Context, params Paym
 			&item.TransactionID,
 			&item.UserID,
 			&item.UserName,
+			&item.UserEmail,
 			&item.PackageName,
 			&item.Amount,
 			&item.NormalAmount,
 			&item.Status,
 			&item.TransactionAt,
+			&item.ExpiredAt,
 			&proofDocumentID,
 			&proofDocumentURL,
 		); err != nil {
