@@ -103,7 +103,6 @@ build_and_push_image:
     - gcloud auth activate-service-account --key-file="$GOOGLE_APPLICATION_CREDENTIALS"
     - test -n "$(gcloud auth list --filter=status:ACTIVE --format='value(account)')" || (echo "No active gcloud account after service account activation" && exit 1)
     - gcloud auth print-access-token >/dev/null || (echo "Failed to obtain OAuth access token from service account key" && exit 1)
-    - gcloud config set project "$GCP_PROJECT_ID"
     - |
       repo_check_output="$(gcloud artifacts repositories describe "$GAR_REPOSITORY" \
         --location "$GAR_REGION" \
@@ -128,6 +127,8 @@ build_and_push_image:
           else
             echo "Artifact Registry repository '$GAR_REPOSITORY' not found in region '$GAR_REGION'."
             echo "Create it manually or set GAR_AUTO_CREATE_REPOSITORY=true with artifactregistry.repositories.create permission."
+            echo "Manual one-time setup (run as project admin):"
+            echo "gcloud artifacts repositories create \"$GAR_REPOSITORY\" --repository-format=docker --location=\"$GAR_REGION\" --project=\"$GCP_PROJECT_ID\""
             exit 1
           fi
         else
@@ -201,8 +202,6 @@ deploy_cloud_run:
         echo "Failed to obtain OAuth access token from service account key"
         exit 1
       }
-      gcloud config set project "$GCP_PROJECT_ID"
-
       DEPLOY_ARGS=(
         run deploy "$CLOUD_RUN_SERVICE"
         --image "$IMAGE_URI"
