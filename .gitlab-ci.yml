@@ -8,7 +8,7 @@ variables:
   GCP_REGION: asia-southeast2
   GAR_REGION: asia-southeast2
   GAR_REPOSITORY: boundless-be
-  GAR_AUTO_CREATE_REPOSITORY: "false"
+  GAR_AUTO_CREATE_REPOSITORY: "true"
   CLOUD_RUN_SERVICE: boundless-be
   CLOUD_RUN_ALLOW_UNAUTHENTICATED: "true"
 
@@ -117,7 +117,11 @@ build_and_push_image:
               --repository-format docker \
               --location "$GAR_REGION" \
               --description "Docker repository for boundless-be Cloud Run images" \
-              --project "$GCP_PROJECT_ID"
+              --project "$GCP_PROJECT_ID" || {
+                echo "Failed to auto-create Artifact Registry repository '$GAR_REPOSITORY'."
+                echo "Ensure the CI service account has artifactregistry.repositories.create permission."
+                exit 1
+              }
           else
             echo "Artifact Registry repository '$GAR_REPOSITORY' not found in region '$GAR_REGION'."
             echo "Create it manually or set GAR_AUTO_CREATE_REPOSITORY=true with artifactregistry.repositories.create permission."
