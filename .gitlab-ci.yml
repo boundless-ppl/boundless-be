@@ -99,19 +99,28 @@ build_and_push_image:
     - gcloud auth print-access-token >/dev/null || (echo "Failed to obtain OAuth access token from service account key" && exit 1)
     - gcloud config set project "$GCP_PROJECT_ID"
     - |
-      if ! gcloud artifacts repositories describe "$GAR_REPOSITORY" \
+      repo_check_output="$(gcloud artifacts repositories describe "$GAR_REPOSITORY" \
         --location "$GAR_REGION" \
-        --project "$GCP_PROJECT_ID" >/dev/null 2>&1; then
-        if [ "$GAR_AUTO_CREATE_REPOSITORY" = "true" ]; then
-          gcloud artifacts repositories create "$GAR_REPOSITORY" \
-            --repository-format docker \
-            --location "$GAR_REGION" \
-            --description "Docker repository for boundless-be Cloud Run images" \
-            --project "$GCP_PROJECT_ID"
+        --project "$GCP_PROJECT_ID" 2>&1)" || repo_check_status=$?
+      repo_check_status="${repo_check_status:-0}"
+
+      if [ "$repo_check_status" -ne 0 ]; then
+        if echo "$repo_check_output" | grep -qi "NOT_FOUND\\|not found"; then
+          if [ "$GAR_AUTO_CREATE_REPOSITORY" = "true" ]; then
+            gcloud artifacts repositories create "$GAR_REPOSITORY" \
+              --repository-format docker \
+              --location "$GAR_REGION" \
+              --description "Docker repository for boundless-be Cloud Run images" \
+              --project "$GCP_PROJECT_ID"
+          else
+            echo "Artifact Registry repository '$GAR_REPOSITORY' not found in region '$GAR_REGION'."
+            echo "Create it manually or set GAR_AUTO_CREATE_REPOSITORY=true with artifactregistry.repositories.create permission."
+            exit 1
+          fi
         else
-          echo "Artifact Registry repository '$GAR_REPOSITORY' not found in region '$GAR_REGION'."
-          echo "Create it manually or set GAR_AUTO_CREATE_REPOSITORY=true with artifactregistry.repositories.create permission."
-          exit 1
+          echo "Failed to check Artifact Registry repository '$GAR_REPOSITORY'."
+          echo "$repo_check_output"
+          exit "$repo_check_status"
         fi
       fi
     - gcloud auth configure-docker "${GAR_REGION}-docker.pkg.dev" --quiet
