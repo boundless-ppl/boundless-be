@@ -28,12 +28,18 @@ unit_test:
   stage: test
   script:
     - go version
-    - go test ./... -coverpkg=./... -coverprofile=coverage.out
+    - |
+      go test ./... -coverpkg=./... -coverprofile=coverage.out > go-test.log 2>&1 || {
+        cat go-test.log
+        exit 1
+      }
+      cat go-test.log
   artifacts:
     when: always
     expire_in: 7 days
     paths:
       - coverage.out
+      - go-test.log
   rules:
     - if: '$CI_COMMIT_BRANCH == "dev"'
 
