@@ -8,7 +8,7 @@ variables:
   GCP_REGION: asia-southeast2
   GAR_REGION: asia-southeast2
   GAR_REPOSITORY: boundless-be
-  GAR_AUTO_CREATE_REPOSITORY: "true"
+  GAR_AUTO_CREATE_REPOSITORY: "false"
   CLOUD_RUN_SERVICE: boundless-be
   CLOUD_RUN_ALLOW_UNAUTHENTICATED: "true"
 
@@ -120,6 +120,9 @@ build_and_push_image:
               --project "$GCP_PROJECT_ID" || {
                 echo "Failed to auto-create Artifact Registry repository '$GAR_REPOSITORY'."
                 echo "Ensure the CI service account has artifactregistry.repositories.create permission."
+                echo "Manual one-time setup (run as project admin):"
+                echo "gcloud artifacts repositories create \"$GAR_REPOSITORY\" --repository-format=docker --location=\"$GAR_REGION\" --project=\"$GCP_PROJECT_ID\""
+                echo "Then keep GAR_AUTO_CREATE_REPOSITORY=false for least-privilege CI."
                 exit 1
               }
           else
