@@ -108,7 +108,7 @@ func TestHTTPRecommendationAIClientRoutesEachModeToExpectedEndpoint(t *testing.T
 				w.Header().Set("Content-Type", "application/json")
 				_ = json.NewEncoder(w).Encode(dto.GlobalMatchAIRecommendationResponse{
 					StudentProfileSummary: dto.GlobalMatchAIStudentProfileSummaryResponse{
-						RawText: "summary",
+						AcademicBackground: "summary",
 					},
 					TopRecommendations: []dto.GlobalMatchAITopRecommendationResponse{
 						{
@@ -169,6 +169,13 @@ func TestHTTPRecommendationAIClientForwardsAllMultipartPreferenceFields(t *testi
 		if got := firstFormValue(form.Value["additional_preference"]); got != "Need strong AI labs" {
 			t.Fatalf("expected additional_preference, got %q", got)
 		}
+		var allowedCandidates []dto.AIAllowedCandidate
+		if err := json.Unmarshal([]byte(firstFormValue(form.Value["allowed_candidates_json"])), &allowedCandidates); err != nil {
+			t.Fatalf("unmarshal allowed candidates: %v", err)
+		}
+		if len(allowedCandidates) != 1 || allowedCandidates[0].ProgramID != "program-1" {
+			t.Fatalf("expected allowed candidates to be forwarded, got %#v", allowedCandidates)
+		}
 
 		if len(form.File["transcript_file"]) != 1 {
 			t.Fatalf("expected transcript_file upload, got %#v", form.File["transcript_file"])
@@ -197,6 +204,14 @@ func TestHTTPRecommendationAIClientForwardsAllMultipartPreferenceFields(t *testi
 			StartPeriods:         []string{"Fall 2026"},
 			AdditionalPreference: "Need strong AI labs",
 		},
+		AllowedCandidates: []dto.AIAllowedCandidate{{
+			ProgramID:             "program-1",
+			ProgramName:           "Computer Science",
+			UniversityName:        "University A",
+			Country:               "Japan",
+			OfficialProgramURL:    "https://unia.example/cs",
+			OfficialUniversityURL: "https://unia.example",
+		}},
 	})
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)

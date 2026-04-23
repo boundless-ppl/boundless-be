@@ -6,22 +6,28 @@ import (
 	"errors"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 )
 
 var ErrMissingDatabaseURL = errors.New("DATABASE_URL is required")
 
-var databaseOpen = sql.Open
+var databaseOpenDB = func(config pgx.ConnConfig) *sql.DB {
+	return stdlib.OpenDB(config)
+}
 
 func NewConnection(databaseURL string) (*sql.DB, error) {
 	if databaseURL == "" {
 		return nil, ErrMissingDatabaseURL
 	}
 
-	db, err := databaseOpen("pgx", databaseURL)
+	config, err := pgx.ParseConfig(databaseURL)
 	if err != nil {
 		return nil, err
 	}
+	config.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+
+	db := databaseOpenDB(*config)
 
 	db.SetMaxOpenConns(20)
 	db.SetMaxIdleConns(10)

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"testing"
+
+	"github.com/jackc/pgx/v5"
 )
 
 func TestNewConnectionRequiresDatabaseURL(t *testing.T) {
@@ -39,13 +41,17 @@ func TestNewConnectionSuccessfulPing(t *testing.T) {
 	driverName := fmt.Sprintf("fakeping_%d", fakePingSeq)
 	sql.Register(driverName, &fakePingDriver{})
 
-	origOpen := databaseOpen
-	databaseOpen = func(driverNameArg, dsn string) (*sql.DB, error) {
-		return sql.Open(driverName, dsn)
+	origOpenDB := databaseOpenDB
+	databaseOpenDB = func(_ pgx.ConnConfig) *sql.DB {
+		db, err := sql.Open(driverName, "")
+		if err != nil {
+			t.Fatalf("expected nil sql open error, got %v", err)
+		}
+		return db
 	}
-	defer func() { databaseOpen = origOpen }()
+	defer func() { databaseOpenDB = origOpenDB }()
 
-	db, err := NewConnection("fake-dsn")
+	db, err := NewConnection("host=localhost port=5432 dbname=db sslmode=disable")
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}

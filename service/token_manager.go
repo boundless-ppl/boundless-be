@@ -57,6 +57,24 @@ func (m *HMACTokenManager) ValidateAccessToken(token string) (TokenClaims, error
 	return claims, nil
 }
 
+func (m *HMACTokenManager) RefreshAccessToken(refreshToken string) (string, error) {
+	claims, err := m.parseToken(refreshToken)
+	if err != nil {
+		return "", ErrInvalidToken
+	}
+	if claims.TokenType != "refresh" {
+		return "", ErrInvalidToken
+	}
+	if m.isRevoked(claims.TokenID) {
+		return "", ErrInvalidToken
+	}
+	if claims.ExpiresAt.Before(time.Now()) {
+		return "", ErrInvalidToken
+	}
+
+	return m.createToken("access", claims.UserID, claims.Role, AccessTokenDuration), nil
+}
+
 func (m *HMACTokenManager) Revoke(token string) error {
 	claims, err := m.parseToken(token)
 	if err != nil {

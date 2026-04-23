@@ -27,6 +27,8 @@ type fakeAuthService struct {
 	loginTokens service.AuthTokens
 	loginErr    error
 	logoutErr   error
+	refreshOut  string
+	refreshErr  error
 }
 
 func (f *fakeAuthService) Register(ctx context.Context, fullName, role, email, password string) error {
@@ -39,6 +41,16 @@ func (f *fakeAuthService) Login(ctx context.Context, email, password string) (se
 
 func (f *fakeAuthService) Logout(token string) error {
 	return f.logoutErr
+}
+
+func (f *fakeAuthService) RefreshAccess(refreshToken string) (string, error) {
+	if f.refreshErr != nil {
+		return "", f.refreshErr
+	}
+	if f.refreshOut == "" {
+		return "new-access-token", nil
+	}
+	return f.refreshOut, nil
 }
 
 type fakeUserRepository struct {
@@ -226,6 +238,49 @@ func TestLogoutUnauthorizedController(t *testing.T) {
 	router.POST("/auth/logout", c.Logout)
 
 	req := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, rec.Code)
+	}
+}
+
+func TestRefreshSuccessController(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &fakeAuthService{refreshOut: "new-access-token"}
+	c := controller.NewAuthController(svc, &fakeUserRepository{}, nil)
+	router := gin.New()
+	router.POST("/auth/refresh", c.Refresh)
+
+	body, _ := json.Marshal(dto.RefreshRequest{RefreshToken: "refresh-token"})
+	req := httptest.NewRequest(http.MethodPost, "/auth/refresh", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+	var got dto.RefreshResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if got.AccessToken != "new-access-token" {
+		t.Fatalf("expected new-access-token, got %s", got.AccessToken)
+	}
+}
+
+func TestRefreshUnauthorizedController(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &fakeAuthService{refreshErr: service.ErrInvalidToken}
+	c := controller.NewAuthController(svc, &fakeUserRepository{}, nil)
+	router := gin.New()
+	router.POST("/auth/refresh", c.Refresh)
+
+	body, _ := json.Marshal(dto.RefreshRequest{RefreshToken: "bad-token"})
+	req := httptest.NewRequest(http.MethodPost, "/auth/refresh", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 

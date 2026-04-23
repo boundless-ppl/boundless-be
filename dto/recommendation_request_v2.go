@@ -21,7 +21,8 @@ type CreateProfileRecommendationRequest struct {
 }
 
 type CreateTranscriptRecommendationRequest struct {
-	TranscriptFile *multipart.FileHeader `form:"transcript_file" binding:"required"`
+	TranscriptFile       *multipart.FileHeader `form:"transcript_file"`
+	TranscriptDocumentID *string               `form:"transcript_document_id" json:"transcript_document_id"`
 	RecommendationPreferenceInput
 }
 

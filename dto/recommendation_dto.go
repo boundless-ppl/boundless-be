@@ -54,18 +54,29 @@ type RecommendationPreferenceResponse struct {
 }
 
 type RecommendationResultResponse struct {
-	RankNo            int      `json:"rank_no"`
-	UniversityName    string   `json:"university_name"`
-	ProgramName       string   `json:"program_name"`
-	Country           string   `json:"country"`
-	FitScore          int      `json:"fit_score"`
-	FitLevel          string   `json:"fit_level"`
-	Overview          string   `json:"overview"`
-	WhyThisUniversity string   `json:"why_this_university"`
-	WhyThisProgram    string   `json:"why_this_program"`
-	ReasonSummary     string   `json:"reason_summary"`
-	Pros              []string `json:"pros"`
-	Cons              []string `json:"cons"`
+	RecResultID                string                                           `json:"rec_result_id"`
+	RankNo                     int                                              `json:"rank_no"`
+	ProgramID                  *string                                          `json:"program_id,omitempty"`
+	AdmissionID                *string                                          `json:"admission_id,omitempty"`
+	SourceRecResultID          string                                           `json:"source_rec_result_id"`
+	UniversityName             string                                           `json:"university_name"`
+	ProgramName                string                                           `json:"program_name"`
+	Country                    string                                           `json:"country"`
+	FitScore                   int                                              `json:"fit_score"`
+	AdmissionChanceScore       int                                              `json:"admission_chance_score"`
+	OverallRecommendationScore int                                              `json:"overall_recommendation_score"`
+	FitLevel                   string                                           `json:"fit_level"`
+	AdmissionDifficulty        string                                           `json:"admission_difficulty,omitempty"`
+	ScoreBreakdown             *GlobalMatchAIScoreBreakdownResponse             `json:"score_breakdown,omitempty"`
+	Overview                   string                                           `json:"overview"`
+	WhyThisUniversity          string                                           `json:"why_this_university"`
+	WhyThisProgram             string                                           `json:"why_this_program"`
+	PreferenceReasoning        []string                                         `json:"preference_reasoning"`
+	MatchEvidence              []string                                         `json:"match_evidence"`
+	ScholarshipRecommendations []GlobalMatchAIScholarshipRecommendationResponse `json:"scholarship_recommendations"`
+	ReasonSummary              string                                           `json:"reason_summary"`
+	Pros                       []string                                         `json:"pros"`
+	Cons                       []string                                         `json:"cons"`
 }
 
 type RecommendationResultSetResponse struct {

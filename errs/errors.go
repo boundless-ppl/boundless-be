@@ -11,6 +11,8 @@ var (
 	ErrNoDocumentProvided          = errors.New("no document provided")
 	ErrExternalService             = errors.New("external service error")
 	ErrDocumentNotFound            = errors.New("document not found")
+	ErrDreamTrackerNotFound        = errors.New("dream tracker not found")
+	ErrDreamRequirementNotFound    = errors.New("dream requirement not found")
 	ErrSubscriptionNotFound        = errors.New("subscription not found")
 	ErrPaymentNotFound             = errors.New("payment not found")
 	ErrPaymentNotPending           = errors.New("payment not pending")
