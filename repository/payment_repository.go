@@ -13,6 +13,7 @@ import (
 	"boundless-be/model"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 type PaymentListParams struct {
@@ -148,6 +149,8 @@ func (r *DBPaymentRepository) CreatePayment(ctx context.Context, payment model.P
 		return model.Payment{}, fmt.Errorf("marshal payment benefits: %w", err)
 	}
 
+	benefitsStr := string(benefitsJSON)
+
 	query := `
 		INSERT INTO payments (
 			payment_id, transaction_id, user_id, subscription_id, package_name_snapshot, duration_months_snapshot,
@@ -169,7 +172,7 @@ func (r *DBPaymentRepository) CreatePayment(ctx context.Context, payment model.P
 		payment.PriceAmountSnapshot,
 		payment.NormalPriceSnapshot,
 		payment.DiscountPriceSnapshot,
-		benefitsJSON,
+		benefitsStr,
 		payment.PaymentChannel,
 		payment.QrisImageURL,
 		payment.Status,
@@ -179,6 +182,19 @@ func (r *DBPaymentRepository) CreatePayment(ctx context.Context, payment model.P
 		payment.UpdatedAt,
 	)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) {
+			switch pgErr.Code {
+			case "23503":
+				// FK violation: stale/invalid auth user or missing subscription reference.
+				if pgErr.ConstraintName == "payments_user_id_fkey" {
+					return model.Payment{}, errs.ErrUnauthorized
+				}
+				if pgErr.ConstraintName == "payments_subscription_id_fkey" {
+					return model.Payment{}, errs.ErrSubscriptionNotFound
+				}
+			}
+		}
 		return model.Payment{}, fmt.Errorf("insert payment: %w", err)
 	}
 

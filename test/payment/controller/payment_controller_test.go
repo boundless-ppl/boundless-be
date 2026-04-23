@@ -310,6 +310,24 @@ func TestCreatePaymentServiceErrorController(t *testing.T) {
 	}
 }
 
+func TestCreatePaymentUnauthorizedFromServiceController(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.POST("/payments", func(c *gin.Context) {
+		c.Set(middleware.UserIDContextKey, "user-1")
+		c.Next()
+	}, controller.NewPaymentController(&fakePaymentService{createPaymentErr: errs.ErrUnauthorized}).CreatePayment)
+
+	req := httptest.NewRequest(http.MethodPost, "/payments", bytes.NewBufferString(`{"subscription_id":"11111111-1111-1111-1111-111111111111"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected %d, got %d", http.StatusUnauthorized, rec.Code)
+	}
+}
+
 func TestGetMyPaymentSuccessController(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	now := time.Now().UTC()
