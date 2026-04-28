@@ -93,6 +93,9 @@ func TestPaymentRepositoryImplementsContract(t *testing.T) {
 	var _ repository.PaymentRepository = (*repository.DBPaymentRepository)(nil)
 }
 
+const THE_SCHOLAR = "The Scholar"
+const USER_SUB_ID = "user-1"
+
 func TestCreatePaymentRepository(t *testing.T) {
 	db := newFakeDB(t, &fakeBehavior{execFn: func(query string, args []driver.NamedValue) (driver.Result, error) {
 		if !strings.Contains(query, "INSERT INTO payments") {
@@ -107,9 +110,9 @@ func TestCreatePaymentRepository(t *testing.T) {
 	_, err := repo.CreatePayment(context.Background(), model.Payment{
 		PaymentID:              "pay-1",
 		TransactionID:          "tx-1",
-		UserID:                 "user-1",
+		UserID:                 USER_SUB_ID,
 		SubscriptionID:         "sub-1",
-		PackageNameSnapshot:    "The Scholar",
+		PackageNameSnapshot:    THE_SCHOLAR,
 		DurationMonthsSnapshot: 3,
 		PriceAmountSnapshot:    100,
 		BenefitsSnapshot:       []string{"a"},
@@ -135,7 +138,7 @@ func TestFindPaymentByIDAndUserNotFoundRepository(t *testing.T) {
 	}})
 	repo := repository.NewPaymentRepository(db)
 
-	_, err := repo.FindPaymentByIDAndUser(context.Background(), "missing", "user-1")
+	_, err := repo.FindPaymentByIDAndUser(context.Background(), "missing", USER_SUB_ID)
 	if !errors.Is(err, errs.ErrPaymentNotFound) {
 		t.Fatalf("expected %v, got %v", errs.ErrPaymentNotFound, err)
 	}
@@ -158,7 +161,7 @@ func TestAttachPaymentProofDocumentNotPendingRepository(t *testing.T) {
 	})
 	repo := repository.NewPaymentRepository(db)
 
-	err := repo.AttachPaymentProofDocument(context.Background(), "pay-1", "user-1", "doc-1")
+	err := repo.AttachPaymentProofDocument(context.Background(), "pay-1", USER_SUB_ID, "doc-1")
 	if !errors.Is(err, errs.ErrPaymentNotPending) {
 		t.Fatalf("expected %v, got %v", errs.ErrPaymentNotPending, err)
 	}
@@ -170,7 +173,7 @@ func TestListActiveSubscriptionsRepository(t *testing.T) {
 		if !strings.Contains(query, "FROM subscriptions") {
 			t.Fatalf("unexpected query: %s", query)
 		}
-		return &fakeRows{columns: []string{"subscription_id", "package_key", "name", "description", "duration_months", "price_amount", "benefits_json", "is_active", "created_at", "updated_at", "normal_price_amount", "discount_price_amount"}, rows: [][]driver.Value{{"sub-1", "scholar", "The Scholar", "desc", int64(3), int64(100), []byte(`["a","b"]`), true, now, now, int64(149000), int64(39000)}}}, nil
+		return &fakeRows{columns: []string{"subscription_id", "package_key", "name", "description", "duration_months", "price_amount", "benefits_json", "is_active", "created_at", "updated_at", "normal_price_amount", "discount_price_amount"}, rows: [][]driver.Value{{"sub-1", "scholar", THE_SCHOLAR, "desc", int64(3), int64(100), []byte(`["a","b"]`), true, now, now, int64(149000), int64(39000)}}}, nil
 	}})
 	repo := repository.NewPaymentRepository(db)
 
@@ -207,7 +210,7 @@ func TestCreateDocumentRepository(t *testing.T) {
 
 	_, err := repo.CreateDocument(context.Background(), model.Document{
 		DocumentID:       "doc-1",
-		UserID:           "user-1",
+		UserID:           USER_SUB_ID,
 		OriginalFilename: "proof.pdf",
 		StoragePath:      "uploads/proof.pdf",
 		PublicURL:        "http://local/proof.pdf",
@@ -224,7 +227,7 @@ func TestCreateDocumentRepository(t *testing.T) {
 func TestFindPaymentByIDRepository(t *testing.T) {
 	now := time.Now().UTC()
 	db := newFakeDB(t, &fakeBehavior{queryFn: func(query string, args []driver.NamedValue) (driver.Rows, error) {
-		return &fakeRows{columns: []string{"payment_id", "transaction_id", "user_id", "subscription_id", "package_name_snapshot", "duration_months_snapshot", "price_amount_snapshot", "normal_price_snapshot", "discount_price_snapshot", "benefits_snapshot_json", "payment_channel", "qris_image_url", "status", "admin_note", "proof_document_id", "verified_by", "verified_at", "paid_at", "expired_at", "created_at", "updated_at"}, rows: [][]driver.Value{{"pay-1", "tx-1", "user-1", "sub-1", "The Scholar", int64(3), int64(100), int64(149000), int64(39000), []byte(`["a"]`), "qris_manual", "-", "pending", nil, nil, nil, nil, nil, now.Add(time.Hour), now, now}}}, nil
+		return &fakeRows{columns: []string{"payment_id", "transaction_id", "user_id", "subscription_id", "package_name_snapshot", "duration_months_snapshot", "price_amount_snapshot", "normal_price_snapshot", "discount_price_snapshot", "benefits_snapshot_json", "payment_channel", "qris_image_url", "status", "admin_note", "proof_document_id", "verified_by", "verified_at", "paid_at", "expired_at", "created_at", "updated_at"}, rows: [][]driver.Value{{"pay-1", "tx-1", USER_SUB_ID, "sub-1", THE_SCHOLAR, int64(3), int64(100), int64(149000), int64(39000), []byte(`["a"]`), "qris_manual", "-", "pending", nil, nil, nil, nil, nil, now.Add(time.Hour), now, now}}}, nil
 	}})
 	repo := repository.NewPaymentRepository(db)
 
@@ -237,6 +240,33 @@ func TestFindPaymentByIDRepository(t *testing.T) {
 	}
 }
 
+func TestFindLatestPendingPaymentByUserRepository(t *testing.T) {
+	now := time.Now().UTC()
+	expiresSoon := now.Add(time.Hour)
+	expiresLater := now.Add(2 * time.Hour)
+	db := newFakeDB(t, &fakeBehavior{queryFn: func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		if !strings.Contains(query, "expired_at >") || !strings.Contains(query, "ORDER BY created_at DESC") {
+			t.Fatalf("unexpected query: %s", query)
+		}
+		return &fakeRows{
+			columns: []string{"payment_id", "transaction_id", "user_id", "subscription_id", "package_name_snapshot", "duration_months_snapshot", "price_amount_snapshot", "normal_price_snapshot", "discount_price_snapshot", "benefits_snapshot_json", "payment_channel", "qris_image_url", "status", "admin_note", "proof_document_id", "verified_by", "verified_at", "paid_at", "expired_at", "created_at", "updated_at"},
+			rows: [][]driver.Value{
+				{"pay-latest", "tx-latest", USER_SUB_ID, "sub-1", THE_SCHOLAR, int64(3), int64(100), int64(149000), int64(39000), []byte(`["a"]`), "qris_manual", "-", "pending", nil, nil, nil, nil, nil, expiresLater, now, now},
+				{"pay-old", "tx-old", USER_SUB_ID, "sub-1", THE_SCHOLAR, int64(3), int64(100), int64(149000), int64(39000), []byte(`["a"]`), "qris_manual", "-", "pending", nil, nil, nil, nil, nil, expiresSoon, now.Add(-time.Hour), now.Add(-time.Hour)},
+			},
+		}, nil
+	}})
+	repo := repository.NewPaymentRepository(db)
+
+	out, err := repo.FindLatestPendingPaymentByUser(context.Background(), USER_SUB_ID, now)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if out.PaymentID != "pay-latest" {
+		t.Fatalf("expected latest payment, got %+v", out)
+	}
+}
+
 func TestFindPremiumCoverageEndAtRepository(t *testing.T) {
 	end := time.Now().UTC().AddDate(0, 1, 0)
 	db := newFakeDB(t, &fakeBehavior{queryFn: func(query string, args []driver.NamedValue) (driver.Rows, error) {
@@ -244,7 +274,7 @@ func TestFindPremiumCoverageEndAtRepository(t *testing.T) {
 	}})
 	repo := repository.NewPaymentRepository(db)
 
-	out, err := repo.FindPremiumCoverageEndAt(context.Background(), "user-1", time.Now().UTC())
+	out, err := repo.FindPremiumCoverageEndAt(context.Background(), USER_SUB_ID, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
@@ -264,14 +294,14 @@ func TestFindCurrentPremiumSubscriptionRepositoryMergesContiguousRows(t *testing
 			return &fakeRows{columns: []string{"c"}, rows: [][]driver.Value{}}, nil
 		}
 		return &fakeRows{columns: []string{"user_subscription_id", "user_id", "subscription_id", "source_payment_id", "package_name_snapshot", "duration_months_snapshot", "price_amount_snapshot", "start_date", "end_date", "created_at"}, rows: [][]driver.Value{
-			{"us-1", "user-1", "sub-1", "pay-1", "The Scholar", int64(3), int64(100), start1, start2, start1},
-			{"us-2", "user-1", "sub-1", "pay-2", "The Scholar", int64(3), int64(100), start2, start3, start2},
-			{"us-3", "user-1", "sub-1", "pay-3", "The Scholar", int64(3), int64(100), start3, end3, start3},
+			{"us-1", USER_SUB_ID, "sub-1", "pay-1", THE_SCHOLAR, int64(3), int64(100), start1, start2, start1},
+			{"us-2", USER_SUB_ID, "sub-1", "pay-2", THE_SCHOLAR, int64(3), int64(100), start2, start3, start2},
+			{"us-3", USER_SUB_ID, "sub-1", "pay-3", THE_SCHOLAR, int64(3), int64(100), start3, end3, start3},
 		}}, nil
 	}})
 	repo := repository.NewPaymentRepository(db)
 
-	out, err := repo.FindCurrentPremiumSubscription(context.Background(), "user-1", ref)
+	out, err := repo.FindCurrentPremiumSubscription(context.Background(), USER_SUB_ID, ref)
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
@@ -311,7 +341,7 @@ func TestListAdminPaymentsRepository(t *testing.T) {
 func TestListPendingPaymentNotificationsRepository(t *testing.T) {
 	now := time.Now().UTC()
 	db := newFakeDB(t, &fakeBehavior{queryFn: func(query string, args []driver.NamedValue) (driver.Rows, error) {
-		return &fakeRows{columns: []string{"payment_id", "transaction_id", "user_id", "nama_lengkap", "email", "package_name_snapshot", "price_amount_snapshot", "public_url", "created_at"}, rows: [][]driver.Value{{"pay-1", "tx-1", "user-1", "Alice", "alice@example.com", "The Scholar", int64(100), "http://local/doc-1", now}}}, nil
+		return &fakeRows{columns: []string{"payment_id", "transaction_id", "user_id", "nama_lengkap", "email", "package_name_snapshot", "price_amount_snapshot", "public_url", "created_at"}, rows: [][]driver.Value{{"pay-1", "tx-1", USER_SUB_ID, "Alice", "alice@example.com", THE_SCHOLAR, int64(100), "http://local/doc-1", now}}}, nil
 	}})
 	repo := repository.NewPaymentRepository(db)
 
@@ -355,13 +385,13 @@ func TestFindUserSubscriptionByPaymentIDRepository(t *testing.T) {
 	now := time.Now().UTC()
 	db := newFakeDB(t, &fakeBehavior{queryFn: func(query string, args []driver.NamedValue) (driver.Rows, error) {
 		if strings.Contains(query, "FROM user_subscriptions") {
-			return &fakeRows{columns: []string{"user_subscription_id", "user_id", "subscription_id", "source_payment_id", "package_name_snapshot", "duration_months_snapshot", "price_amount_snapshot", "start_date", "end_date", "created_at"}, rows: [][]driver.Value{{"us-1", "user-1", "sub-1", "pay-1", "The Scholar", int64(3), int64(100), now, now.AddDate(0, 3, 0), now}}}, nil
+			return &fakeRows{columns: []string{"user_subscription_id", "user_id", "subscription_id", "source_payment_id", "package_name_snapshot", "duration_months_snapshot", "price_amount_snapshot", "start_date", "end_date", "created_at"}, rows: [][]driver.Value{{"us-1", USER_SUB_ID, "sub-1", "pay-1", THE_SCHOLAR, int64(3), int64(100), now, now.AddDate(0, 3, 0), now}}}, nil
 		}
 		return &fakeRows{columns: []string{"c"}, rows: [][]driver.Value{}}, nil
 	}})
 	repo := repository.NewPaymentRepository(db)
 
-	out, err := repo.FindUserSubscriptionByPaymentID(context.Background(), "pay-1", "user-1")
+	out, err := repo.FindUserSubscriptionByPaymentID(context.Background(), "pay-1", USER_SUB_ID)
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
@@ -375,7 +405,7 @@ func TestMarkPaymentSuccessRepository(t *testing.T) {
 	db := newFakeDB(t, &fakeBehavior{
 		queryFn: func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			if strings.Contains(query, "FOR UPDATE") {
-				return &fakeRows{columns: []string{"payment_id", "transaction_id", "user_id", "subscription_id", "package_name_snapshot", "duration_months_snapshot", "price_amount_snapshot", "normal_price_snapshot", "discount_price_snapshot", "benefits_snapshot_json", "payment_channel", "qris_image_url", "status", "admin_note", "proof_document_id", "verified_by", "verified_at", "paid_at", "expired_at", "created_at", "updated_at"}, rows: [][]driver.Value{{"pay-1", "tx-1", "user-1", "sub-1", "The Scholar", int64(3), int64(100), int64(149000), int64(39000), []byte(`["a"]`), "qris_manual", "-", "pending", nil, nil, nil, nil, nil, now.Add(time.Hour), now, now}}}, nil
+				return &fakeRows{columns: []string{"payment_id", "transaction_id", "user_id", "subscription_id", "package_name_snapshot", "duration_months_snapshot", "price_amount_snapshot", "normal_price_snapshot", "discount_price_snapshot", "benefits_snapshot_json", "payment_channel", "qris_image_url", "status", "admin_note", "proof_document_id", "verified_by", "verified_at", "paid_at", "expired_at", "created_at", "updated_at"}, rows: [][]driver.Value{{"pay-1", "tx-1", USER_SUB_ID, "sub-1", THE_SCHOLAR, int64(3), int64(100), int64(149000), int64(39000), []byte(`["a"]`), "qris_manual", "-", "pending", nil, nil, nil, nil, nil, now.Add(time.Hour), now, now}}}, nil
 			}
 			return &fakeRows{columns: []string{"c"}, rows: [][]driver.Value{}}, nil
 		},
@@ -419,7 +449,7 @@ func TestMarkPaymentFailedNotFoundRepository(t *testing.T) {
 func TestFindActiveSubscriptionByIDRepository(t *testing.T) {
 	now := time.Now().UTC()
 	db := newFakeDB(t, &fakeBehavior{queryFn: func(query string, args []driver.NamedValue) (driver.Rows, error) {
-		return &fakeRows{columns: []string{"subscription_id", "package_key", "name", "description", "duration_months", "price_amount", "benefits_json", "is_active", "created_at", "updated_at", "normal_price_amount", "discount_price_amount"}, rows: [][]driver.Value{{"sub-1", "scholar", "The Scholar", "desc", int64(3), int64(100), []byte(`["a"]`), true, now, now, int64(149000), int64(39000)}}}, nil
+		return &fakeRows{columns: []string{"subscription_id", "package_key", "name", "description", "duration_months", "price_amount", "benefits_json", "is_active", "created_at", "updated_at", "normal_price_amount", "discount_price_amount"}, rows: [][]driver.Value{{"sub-1", "scholar", THE_SCHOLAR, "desc", int64(3), int64(100), []byte(`["a"]`), true, now, now, int64(149000), int64(39000)}}}, nil
 	}})
 	repo := repository.NewPaymentRepository(db)
 
@@ -450,7 +480,7 @@ func TestAttachPaymentProofDocumentSuccessRepository(t *testing.T) {
 	}})
 	repo := repository.NewPaymentRepository(db)
 
-	err := repo.AttachPaymentProofDocument(context.Background(), "pay-1", "user-1", "doc-1")
+	err := repo.AttachPaymentProofDocument(context.Background(), "pay-1", USER_SUB_ID, "doc-1")
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
@@ -473,7 +503,7 @@ func TestAttachPaymentProofDocumentNotFoundRepository(t *testing.T) {
 	})
 	repo := repository.NewPaymentRepository(db)
 
-	err := repo.AttachPaymentProofDocument(context.Background(), "pay-1", "user-1", "doc-1")
+	err := repo.AttachPaymentProofDocument(context.Background(), "pay-1", USER_SUB_ID, "doc-1")
 	if !errors.Is(err, errs.ErrPaymentNotFound) {
 		t.Fatalf("expected %v, got %v", errs.ErrPaymentNotFound, err)
 	}
@@ -483,7 +513,7 @@ func TestMarkPaymentSuccessNotPendingRepository(t *testing.T) {
 	now := time.Now().UTC()
 	db := newFakeDB(t, &fakeBehavior{queryFn: func(query string, args []driver.NamedValue) (driver.Rows, error) {
 		if strings.Contains(query, "FOR UPDATE") {
-			return &fakeRows{columns: []string{"payment_id", "transaction_id", "user_id", "subscription_id", "package_name_snapshot", "duration_months_snapshot", "price_amount_snapshot", "normal_price_snapshot", "discount_price_snapshot", "benefits_snapshot_json", "payment_channel", "qris_image_url", "status", "admin_note", "proof_document_id", "verified_by", "verified_at", "paid_at", "expired_at", "created_at", "updated_at"}, rows: [][]driver.Value{{"pay-1", "tx-1", "user-1", "sub-1", "The Scholar", int64(3), int64(100), int64(149000), int64(39000), []byte(`["a"]`), "qris_manual", "-", "success", nil, nil, nil, nil, nil, now.Add(time.Hour), now, now}}}, nil
+			return &fakeRows{columns: []string{"payment_id", "transaction_id", "user_id", "subscription_id", "package_name_snapshot", "duration_months_snapshot", "price_amount_snapshot", "normal_price_snapshot", "discount_price_snapshot", "benefits_snapshot_json", "payment_channel", "qris_image_url", "status", "admin_note", "proof_document_id", "verified_by", "verified_at", "paid_at", "expired_at", "created_at", "updated_at"}, rows: [][]driver.Value{{"pay-1", "tx-1", USER_SUB_ID, "sub-1", THE_SCHOLAR, int64(3), int64(100), int64(149000), int64(39000), []byte(`["a"]`), "qris_manual", "-", "success", nil, nil, nil, nil, nil, now.Add(time.Hour), now, now}}}, nil
 		}
 		return &fakeRows{columns: []string{"c"}, rows: [][]driver.Value{}}, nil
 	}})

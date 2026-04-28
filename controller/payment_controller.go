@@ -84,10 +84,14 @@ func (c *PaymentController) CreatePayment(ctx *gin.Context) {
 		switch {
 		case errors.Is(err, errs.ErrInvalidInput):
 			ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: "invalid input"})
+		case errors.Is(err, errs.ErrUnauthorized):
+			ctx.JSON(http.StatusUnauthorized, dto.ErrorResponse{Error: "authentication failed"})
 		case errors.Is(err, errs.ErrSubscriptionNotFound):
 			ctx.JSON(http.StatusNotFound, dto.ErrorResponse{Error: "subscription not found"})
 		default:
-			ctx.JSON(http.StatusInternalServerError, dto.ErrorResponse{Error: "internal server error"})
+			ctx.JSON(http.StatusInternalServerError, dto.ErrorResponse{
+				Error: err.Error(),
+			})
 		}
 		return
 	}

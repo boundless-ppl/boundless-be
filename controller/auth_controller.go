@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"boundless-be/dto"
-	"boundless-be/errs"
 	"boundless-be/middleware"
 	"boundless-be/model"
 	"boundless-be/repository"
@@ -26,18 +25,19 @@ type AuthService interface {
 	RefreshAccess(refreshToken string) (string, error)
 }
 
-type PremiumRepository interface {
+type PaymentStatusRepository interface {
 	FindCurrentPremiumSubscription(ctx context.Context, userID string, reference time.Time) (model.UserSubscription, error)
+	FindLatestPendingPaymentByUser(ctx context.Context, userID string, reference time.Time) (model.Payment, error)
 }
 
 type AuthController struct {
 	authService AuthService
 	userRepo    repository.UserRepository
-	premiumRepo PremiumRepository
+	statusRepo  PaymentStatusRepository
 }
 
-func NewAuthController(authService AuthService, userRepo repository.UserRepository, premiumRepo PremiumRepository) *AuthController {
-	return &AuthController{authService: authService, userRepo: userRepo, premiumRepo: premiumRepo}
+func NewAuthController(authService AuthService, userRepo repository.UserRepository, statusRepo PaymentStatusRepository) *AuthController {
+	return &AuthController{authService: authService, userRepo: userRepo, statusRepo: statusRepo}
 }
 
 func (c *AuthController) Register(ctx *gin.Context) {
@@ -145,19 +145,18 @@ func (c *AuthController) Me(ctx *gin.Context) {
 		IsPremium:   false,
 	}
 
-	if c.premiumRepo != nil {
-		premiumSub, err := c.premiumRepo.FindCurrentPremiumSubscription(ctx.Request.Context(), user.UserID, time.Now().UTC())
+	if c.statusRepo != nil {
+		status, err := service.BuildMeStatus(ctx.Request.Context(), c.statusRepo, user.UserID, time.Now().UTC())
 		if err != nil {
-			if !errors.Is(err, errs.ErrPremiumSubscriptionNotFound) {
-				log.Printf("auth me premium lookup failed for user %s: %v", user.UserID, err)
-			}
-		} else {
-			response.IsPremium = true
-			startAt := premiumSub.StartDate.UTC().Format(time.RFC3339)
-			endAt := premiumSub.EndDate.UTC().Format(time.RFC3339)
-			response.PremiumStartAt = &startAt
-			response.PremiumEndAt = &endAt
+			ctx.JSON(http.StatusInternalServerError, dto.ErrorResponse{Error: "internal server error"})
+			return
 		}
+
+		response.IsPremium = status.IsPremium
+		response.PremiumStartAt = status.PremiumStartAt
+		response.PremiumEndAt = status.PremiumEndAt
+		response.HasPendingPayment = status.HasPendingPayment
+		response.TransactionID = status.TransactionID
 	}
 
 	ctx.JSON(http.StatusOK, response)

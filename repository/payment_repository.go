@@ -13,6 +13,7 @@ import (
 	"boundless-be/model"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 type PaymentListParams struct {
@@ -73,6 +74,7 @@ type PaymentRepository interface {
 	CreateDocument(ctx context.Context, doc model.Document) (model.Document, error)
 	FindPaymentByID(ctx context.Context, paymentID string) (model.Payment, error)
 	FindPaymentByIDAndUser(ctx context.Context, paymentID, userID string) (model.Payment, error)
+	FindLatestPendingPaymentByUser(ctx context.Context, userID string, reference time.Time) (model.Payment, error)
 	FindUserSubscriptionByPaymentID(ctx context.Context, paymentID, userID string) (model.UserSubscription, error)
 	FindPremiumCoverageEndAt(ctx context.Context, userID string, reference time.Time) (*time.Time, error)
 	FindCurrentPremiumSubscription(ctx context.Context, userID string, reference time.Time) (model.UserSubscription, error)
@@ -148,6 +150,8 @@ func (r *DBPaymentRepository) CreatePayment(ctx context.Context, payment model.P
 		return model.Payment{}, fmt.Errorf("marshal payment benefits: %w", err)
 	}
 
+	benefitsStr := string(benefitsJSON)
+
 	query := `
 		INSERT INTO payments (
 			payment_id, transaction_id, user_id, subscription_id, package_name_snapshot, duration_months_snapshot,
@@ -169,7 +173,7 @@ func (r *DBPaymentRepository) CreatePayment(ctx context.Context, payment model.P
 		payment.PriceAmountSnapshot,
 		payment.NormalPriceSnapshot,
 		payment.DiscountPriceSnapshot,
-		string(benefitsJSON),
+		benefitsStr,
 		payment.PaymentChannel,
 		payment.QrisImageURL,
 		payment.Status,
@@ -179,6 +183,19 @@ func (r *DBPaymentRepository) CreatePayment(ctx context.Context, payment model.P
 		payment.UpdatedAt,
 	)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) {
+			switch pgErr.Code {
+			case "23503":
+				// FK violation: stale/invalid auth user or missing subscription reference.
+				if pgErr.ConstraintName == "payments_user_id_fkey" {
+					return model.Payment{}, errs.ErrUnauthorized
+				}
+				if pgErr.ConstraintName == "payments_subscription_id_fkey" {
+					return model.Payment{}, errs.ErrSubscriptionNotFound
+				}
+			}
+		}
 		return model.Payment{}, fmt.Errorf("insert payment: %w", err)
 	}
 
@@ -241,6 +258,30 @@ func (r *DBPaymentRepository) FindPaymentByIDAndUser(ctx context.Context, paymen
 	`
 
 	payment, err := r.scanPayment(r.db.QueryRowContext(ctx, query, paymentID, userID))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return model.Payment{}, errs.ErrPaymentNotFound
+		}
+		return model.Payment{}, err
+	}
+
+	return payment, nil
+}
+
+func (r *DBPaymentRepository) FindLatestPendingPaymentByUser(ctx context.Context, userID string, reference time.Time) (model.Payment, error) {
+	query := `
+		SELECT payment_id, transaction_id, user_id, subscription_id, package_name_snapshot, duration_months_snapshot,
+		       price_amount_snapshot, normal_price_snapshot, discount_price_snapshot, benefits_snapshot_json, payment_channel, qris_image_url,
+		       status, admin_note, proof_document_id, verified_by, verified_at, paid_at, expired_at, created_at, updated_at
+		FROM payments
+		WHERE user_id = $1
+		  AND status = $2
+		  AND expired_at > $3
+		ORDER BY created_at DESC
+		LIMIT 1
+	`
+
+	payment, err := r.scanPayment(r.db.QueryRowContext(ctx, query, userID, model.PaymentStatusPending, reference.UTC()))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return model.Payment{}, errs.ErrPaymentNotFound

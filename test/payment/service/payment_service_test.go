@@ -102,6 +102,22 @@ func (f *fakePaymentRepo) FindPaymentByIDAndUser(ctx context.Context, paymentID,
 	return f.paymentByUser, nil
 }
 
+func (f *fakePaymentRepo) FindLatestPendingPaymentByUser(ctx context.Context, userID string, reference time.Time) (model.Payment, error) {
+	if f.paymentByUserErr != nil {
+		return model.Payment{}, f.paymentByUserErr
+	}
+	if f.paymentByUser.PaymentID == "" {
+		return model.Payment{}, errs.ErrPaymentNotFound
+	}
+	if f.paymentByUser.UserID != userID {
+		return model.Payment{}, errs.ErrPaymentNotFound
+	}
+	if f.paymentByUser.ExpiredAt != nil && !f.paymentByUser.ExpiredAt.After(reference) {
+		return model.Payment{}, errs.ErrPaymentNotFound
+	}
+	return f.paymentByUser, nil
+}
+
 func (f *fakePaymentRepo) FindUserSubscriptionByPaymentID(ctx context.Context, paymentID, userID string) (model.UserSubscription, error) {
 	if f.userSubByPaymentErr != nil {
 		return model.UserSubscription{}, f.userSubByPaymentErr
@@ -247,6 +263,8 @@ func makeProofHeader(t *testing.T) *multipart.FileHeader {
 	return files[0]
 }
 
+const USER_SUB_ID = "user-1"
+
 func TestUpdatePaymentStatusUsesCoverageEndAtPurchaseTime(t *testing.T) {
 	reference := time.Date(2026, time.April, 4, 10, 0, 0, 0, time.UTC)
 	coverageEnd := time.Date(2026, time.April, 10, 10, 0, 0, 0, time.UTC)
@@ -254,7 +272,7 @@ func TestUpdatePaymentStatusUsesCoverageEndAtPurchaseTime(t *testing.T) {
 		paymentByID: model.Payment{
 			PaymentID:              "pay-1",
 			TransactionID:          "PAY-20260404-100000-ABCDEF01",
-			UserID:                 "user-1",
+			UserID:                 USER_SUB_ID,
 			SubscriptionID:         "sub-1",
 			PackageNameSnapshot:    "The Scholar",
 			DurationMonthsSnapshot: 3,
@@ -282,7 +300,7 @@ func TestUploadProofForPaymentAttachesDocument(t *testing.T) {
 	repo := &fakePaymentRepo{
 		paymentByUser: model.Payment{
 			PaymentID:     "pay-1",
-			UserID:        "user-1",
+			UserID:        USER_SUB_ID,
 			Status:        model.PaymentStatusPending,
 			TransactionID: "TX-1",
 		},
@@ -295,14 +313,14 @@ func TestUploadProofForPaymentAttachesDocument(t *testing.T) {
 	}})
 
 	header := makeProofHeader(t)
-	doc, err := svc.UploadProofForPayment(context.Background(), "user-1", "pay-1", header)
+	doc, err := svc.UploadProofForPayment(context.Background(), USER_SUB_ID, "pay-1", header)
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
 	if doc.DocumentType != model.DocumentTypePaymentProof {
 		t.Fatalf("expected payment proof doc type, got %s", doc.DocumentType)
 	}
-	if repo.attachProofArgs.paymentID != "pay-1" || repo.attachProofArgs.userID != "user-1" {
+	if repo.attachProofArgs.paymentID != "pay-1" || repo.attachProofArgs.userID != USER_SUB_ID {
 		t.Fatalf("unexpected attach args: %+v", repo.attachProofArgs)
 	}
 }
@@ -312,7 +330,7 @@ func TestPaymentNotificationRunOnceMarksSent(t *testing.T) {
 		notifications: []repository.PendingPaymentNotification{{
 			PaymentID:        "pay-1",
 			TransactionID:    "TX-1",
-			UserID:           "user-1",
+			UserID:           USER_SUB_ID,
 			UserName:         "Alice",
 			UserEmail:        "alice@example.com",
 			PackageName:      "The Scholar",
@@ -342,14 +360,35 @@ func TestUploadProofForPaymentRejectsFinalizedPayment(t *testing.T) {
 	repo := &fakePaymentRepo{
 		paymentByUser: model.Payment{
 			PaymentID: "pay-1",
-			UserID:    "user-1",
+			UserID:    USER_SUB_ID,
 			Status:    model.PaymentStatusSuccess,
 		},
 	}
 	svc := service.NewPaymentServiceWithDeps(repo, &fakeDocumentStorage{stored: service.StoredObject{}})
 
 	header := makeProofHeader(t)
-	_, err := svc.UploadProofForPayment(context.Background(), "user-1", "pay-1", header)
+	_, err := svc.UploadProofForPayment(context.Background(), USER_SUB_ID, "pay-1", header)
+	if err != errs.ErrPaymentNotPending {
+		t.Fatalf("expected %v, got %v", errs.ErrPaymentNotPending, err)
+	}
+}
+
+func TestUploadProofForPaymentRejectsExpiredPendingPayment(t *testing.T) {
+	expired := time.Now().UTC().Add(-time.Hour)
+	repo := &fakePaymentRepo{
+		paymentByUser: model.Payment{
+			PaymentID: "pay-1",
+			UserID:    USER_SUB_ID,
+			Status:    model.PaymentStatusPending,
+			ExpiredAt: &expired,
+			CreatedAt: expired.Add(-time.Hour),
+			UpdatedAt: expired.Add(-time.Hour),
+		},
+	}
+	svc := service.NewPaymentServiceWithDeps(repo, &fakeDocumentStorage{stored: service.StoredObject{}})
+
+	header := makeProofHeader(t)
+	_, err := svc.UploadProofForPayment(context.Background(), USER_SUB_ID, "pay-1", header)
 	if err != errs.ErrPaymentNotPending {
 		t.Fatalf("expected %v, got %v", errs.ErrPaymentNotPending, err)
 	}
@@ -378,7 +417,7 @@ func TestCreatePaymentUsesSubscriptionSnapshotAndDefaultQris(t *testing.T) {
 	}
 
 	svc := service.NewPaymentServiceWithDeps(repo, &fakeDocumentStorage{})
-	out, err := svc.CreatePayment(context.Background(), "user-1", "sub-1")
+	out, err := svc.CreatePayment(context.Background(), USER_SUB_ID, "sub-1")
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
@@ -388,7 +427,7 @@ func TestCreatePaymentUsesSubscriptionSnapshotAndDefaultQris(t *testing.T) {
 	if out.Payment.QrisImageURL != "-" {
 		t.Fatalf("expected default qris '-', got %s", out.Payment.QrisImageURL)
 	}
-	if repo.createPaymentInput.SubscriptionID != "sub-1" || repo.createPaymentInput.UserID != "user-1" {
+	if repo.createPaymentInput.SubscriptionID != "sub-1" || repo.createPaymentInput.UserID != USER_SUB_ID {
 		t.Fatalf("unexpected create payment input: %+v", repo.createPaymentInput)
 	}
 	if repo.createPaymentInput.ExpiredAt == nil {
@@ -446,7 +485,7 @@ func TestGetMyPaymentBuildsPremiumWindowFromPaidAtFallback(t *testing.T) {
 	repo := &fakePaymentRepo{
 		paymentByUser: model.Payment{
 			PaymentID:              "pay-1",
-			UserID:                 "user-1",
+			UserID:                 USER_SUB_ID,
 			Status:                 model.PaymentStatusSuccess,
 			DurationMonthsSnapshot: 2,
 			PaidAt:                 &paidAt,
@@ -455,7 +494,7 @@ func TestGetMyPaymentBuildsPremiumWindowFromPaidAtFallback(t *testing.T) {
 	}
 	svc := service.NewPaymentServiceWithDeps(repo, &fakeDocumentStorage{})
 
-	out, err := svc.GetMyPayment(context.Background(), "user-1", "pay-1")
+	out, err := svc.GetMyPayment(context.Background(), USER_SUB_ID, "pay-1")
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
@@ -580,7 +619,7 @@ func TestPaymentNotificationRunOnceReturnsSendError(t *testing.T) {
 		notifications: []repository.PendingPaymentNotification{{
 			PaymentID:        "pay-1",
 			TransactionID:    "TX-1",
-			UserID:           "user-1",
+			UserID:           USER_SUB_ID,
 			UserName:         "Alice",
 			UserEmail:        "alice@example.com",
 			PackageName:      "The Scholar",
@@ -610,12 +649,12 @@ func TestGetMyPaymentInvalidInput(t *testing.T) {
 
 func TestGetMyPaymentReturnsRepoErrorWhenUserSubLookupFails(t *testing.T) {
 	repo := &fakePaymentRepo{
-		paymentByUser:       model.Payment{PaymentID: "pay-1", UserID: "user-1", Status: model.PaymentStatusSuccess},
+		paymentByUser:       model.Payment{PaymentID: "pay-1", UserID: USER_SUB_ID, Status: model.PaymentStatusSuccess},
 		userSubByPaymentErr: errs.ErrExternalService,
 	}
 	svc := service.NewPaymentServiceWithDeps(repo, &fakeDocumentStorage{})
 
-	_, err := svc.GetMyPayment(context.Background(), "user-1", "pay-1")
+	_, err := svc.GetMyPayment(context.Background(), USER_SUB_ID, "pay-1")
 	if err != errs.ErrExternalService {
 		t.Fatalf("expected %v, got %v", errs.ErrExternalService, err)
 	}
@@ -646,7 +685,7 @@ func TestUpdatePaymentStatusSuccessWithExplicitStartDate(t *testing.T) {
 		paymentByID: model.Payment{
 			PaymentID:              "pay-1",
 			TransactionID:          "tx-1",
-			UserID:                 "user-1",
+			UserID:                 USER_SUB_ID,
 			SubscriptionID:         "sub-1",
 			PackageNameSnapshot:    "The Scholar",
 			DurationMonthsSnapshot: 1,
@@ -678,13 +717,13 @@ func TestUploadProofForPaymentInvalidInput(t *testing.T) {
 
 func TestUploadProofForPaymentAttachError(t *testing.T) {
 	repo := &fakePaymentRepo{
-		paymentByUser:  model.Payment{PaymentID: "pay-1", UserID: "user-1", Status: model.PaymentStatusPending},
+		paymentByUser:  model.Payment{PaymentID: "pay-1", UserID: USER_SUB_ID, Status: model.PaymentStatusPending},
 		attachProofErr: errs.ErrExternalService,
 	}
 	svc := service.NewPaymentServiceWithDeps(repo, &fakeDocumentStorage{stored: service.StoredObject{StoragePath: "x", PublicURL: "y", MIMEType: "application/pdf", SizeBytes: 10}})
 
 	header := makeProofHeader(t)
-	_, err := svc.UploadProofForPayment(context.Background(), "user-1", "pay-1", header)
+	_, err := svc.UploadProofForPayment(context.Background(), USER_SUB_ID, "pay-1", header)
 	if err != errs.ErrExternalService {
 		t.Fatalf("expected %v, got %v", errs.ErrExternalService, err)
 	}

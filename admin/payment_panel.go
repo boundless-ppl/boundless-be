@@ -236,17 +236,18 @@ const paymentStatusPanelTemplate = `<!doctype html>
             {{end}}
           </td>
           <td>
-            <form method="post" action="{{$.Prefix}}/payment-panel/status">
-							<input type="hidden" name="csrf_token" value="{{$.CSRF}}">
-              <input type="hidden" name="payment_id" value="{{.PaymentID}}">
-              <div class="row">
-                <button class="btn btn-ok" type="submit" name="status" value="success">Approve</button>
-                <button class="btn btn-no" type="submit" name="status" value="failed">Reject</button>
-              </div>
-              <div style="margin-top:8px">
-                <textarea name="admin_note" placeholder="Admin note optional"></textarea>
-              </div>
-            </form>
+            <form onsubmit="return submitStatus(event, '{{.PaymentID}}')">
+				<input type="hidden" name="csrf_token" value="{{$.CSRF}}">
+				
+				<div class="row">
+					<button class="btn btn-ok" type="submit" onclick="setStatus('success')">Approve</button>
+					<button class="btn btn-no" type="submit" onclick="setStatus('failed')">Reject</button>
+				</div>
+
+				<div style="margin-top:8px">
+					<textarea name="admin_note" placeholder="Admin note optional"></textarea>
+				</div>
+			</form>
           </td>
         </tr>
         {{end}}
@@ -254,4 +255,47 @@ const paymentStatusPanelTemplate = `<!doctype html>
     </table>
   </div>
 </body>
+
+<script>
+let selectedStatus = "";
+
+function setStatus(status) {
+  selectedStatus = status;
+}
+
+async function submitStatus(event, paymentID) {
+  event.preventDefault(); // ⛔ stop form redirect
+
+  const form = event.target;
+  const adminNote = form.querySelector("textarea").value;
+  const csrfToken = form.querySelector("input[name='csrf_token']").value;
+
+  try {
+    const formData = new FormData();
+    formData.append("payment_id", paymentID);
+    formData.append("status", selectedStatus);
+    formData.append("admin_note", adminNote);
+    formData.append("csrf_token", csrfToken);
+
+    const res = await fetch("{{.Prefix}}/payment-panel/status", {
+      method: "POST",
+      body: formData
+    });
+
+    if (!res.ok) {
+      alert("failed to update");
+      return;
+    }
+
+    // reload biar data ke-refresh
+    window.location.reload();
+
+  } catch (err) {
+    console.error(err);
+    alert("error occurred");
+  }
+
+  return false;
+}
+</script>
 </html>`
