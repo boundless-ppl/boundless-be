@@ -18,4 +18,5 @@ var (
 	ErrPaymentNotPending           = errors.New("payment not pending")
 	ErrInvalidPaymentStatus        = errors.New("invalid payment status")
 	ErrPremiumSubscriptionNotFound = errors.New("premium subscription not found")
+	ErrScholarshipNotFound         = errors.New("scholarship not found")
 )

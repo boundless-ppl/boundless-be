@@ -39,12 +39,14 @@ func main() {
 	recRepo := repository.NewRecommendationRepository(db)
 	paymentRepo := repository.NewPaymentRepository(db)
 	dreamTrackerRepo := repository.NewDreamTrackerRepository(db)
+	scholarshipRepo := repository.NewScholarshipRepository(db)
 	handler := api.NewHandler(api.Dependencies{
 		UserRepo:         userRepo,
 		UnivRepo:         univRepo,
 		RecRepo:          recRepo,
 		PaymentRepo:      paymentRepo,
 		DreamTrackerRepo: dreamTrackerRepo,
+		ScholarshipRepo:  scholarshipRepo,
 	})
 
 	appCtx, cancel := context.WithCancel(context.Background())
