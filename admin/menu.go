@@ -133,7 +133,7 @@ func ensurePaymentAdminViews(dbConn *sql.DB) error {
 			p.expired_at
 		FROM payments p
 		JOIN users u ON u.user_id = p.user_id
-		WHERE p.status = 'pending'`,
+		WHERE p.status IN ('pending', 'failed')`,
 	}
 
 	for _, stmt := range statements {
