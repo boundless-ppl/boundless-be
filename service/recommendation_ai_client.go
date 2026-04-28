@@ -8,6 +8,8 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,9 +17,10 @@ import (
 )
 
 const (
-	profileRecommendationPath    = "/recommend/profile"
-	transcriptRecommendationPath = "/recommend/transcript"
-	cvRecommendationPath         = "/recommend/cv"
+	profileRecommendationPath      = "/recommend/profile"
+	transcriptRecommendationPath   = "/recommend/transcript"
+	cvRecommendationPath           = "/recommend/cv"
+	defaultRecommendationAITimeout = 180 * time.Second
 )
 
 type RecommendationAIClient interface {
@@ -32,12 +35,33 @@ type HTTPRecommendationAIClient struct {
 }
 
 func NewHTTPRecommendationAIClient(baseURL string) *HTTPRecommendationAIClient {
+	return NewHTTPRecommendationAIClientWithTimeout(baseURL, recommendationAITimeout())
+}
+
+func NewHTTPRecommendationAIClientWithTimeout(baseURL string, timeout time.Duration) *HTTPRecommendationAIClient {
+	if timeout <= 0 {
+		timeout = defaultRecommendationAITimeout
+	}
 	return &HTTPRecommendationAIClient{
 		baseURL: strings.TrimSuffix(baseURL, "/"),
 		httpClient: &http.Client{
-			Timeout: 60 * time.Second,
+			Timeout: timeout,
 		},
 	}
+}
+
+func recommendationAITimeout() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("AI_SERVICE_TIMEOUT_SECONDS"))
+	if raw == "" {
+		return defaultRecommendationAITimeout
+	}
+
+	seconds, err := strconv.Atoi(raw)
+	if err != nil || seconds <= 0 {
+		return defaultRecommendationAITimeout
+	}
+
+	return time.Duration(seconds) * time.Second
 }
 
 func (c *HTTPRecommendationAIClient) RecommendProfile(ctx context.Context, req dto.AIProfileRecommendationRequest) (dto.GlobalMatchAIRecommendationResponse, error) {
@@ -49,6 +73,7 @@ func (c *HTTPRecommendationAIClient) RecommendProfile(ctx context.Context, req d
 			{FieldName: "cv_file", Header: req.CVFile},
 		},
 		req.Preferences,
+		req.AllowedCandidates,
 	)
 }
 
@@ -60,6 +85,7 @@ func (c *HTTPRecommendationAIClient) RecommendTranscript(ctx context.Context, re
 			{FieldName: "file", Header: req.TranscriptFile},
 		},
 		req.Preferences,
+		req.AllowedCandidates,
 	)
 }
 
@@ -71,6 +97,7 @@ func (c *HTTPRecommendationAIClient) RecommendCV(ctx context.Context, req dto.AI
 			{FieldName: "file", Header: req.CVFile},
 		},
 		req.Preferences,
+		req.AllowedCandidates,
 	)
 }
 
@@ -84,8 +111,9 @@ func (c *HTTPRecommendationAIClient) doMultipartRecommendation(
 	path string,
 	files []multipartFilePart,
 	preferences dto.RecommendationPreferenceInput,
+	allowedCandidates []dto.AIAllowedCandidate,
 ) (dto.GlobalMatchAIRecommendationResponse, error) {
-	requestBody, contentType, err := buildRecommendationMultipartBody(files, preferences)
+	requestBody, contentType, err := buildRecommendationMultipartBody(files, preferences, allowedCandidates)
 	if err != nil {
 		return dto.GlobalMatchAIRecommendationResponse{}, err
 	}
@@ -118,6 +146,7 @@ func (c *HTTPRecommendationAIClient) doMultipartRecommendation(
 func buildRecommendationMultipartBody(
 	files []multipartFilePart,
 	preferences dto.RecommendationPreferenceInput,
+	allowedCandidates []dto.AIAllowedCandidate,
 ) ([]byte, string, error) {
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
@@ -154,6 +183,13 @@ func buildRecommendationMultipartBody(
 	writeMultiValueField(writer, "scholarship_types", preferences.ScholarshipTypes)
 	writeMultiValueField(writer, "start_periods", preferences.StartPeriods)
 	writeSingleValueField(writer, "additional_preference", preferences.AdditionalPreference)
+	if len(allowedCandidates) > 0 {
+		payload, err := json.Marshal(allowedCandidates)
+		if err != nil {
+			return nil, "", fmt.Errorf("marshal allowed candidates: %w", err)
+		}
+		writeSingleValueField(writer, "allowed_candidates_json", string(payload))
+	}
 
 	if err := writer.Close(); err != nil {
 		return nil, "", fmt.Errorf("close multipart writer: %w", err)

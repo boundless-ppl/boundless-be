@@ -125,15 +125,27 @@ func TestLoginWrongPasswordService(t *testing.T) {
 	}
 }
 
-func TestLoginUpdateErrorService(t *testing.T) {
+func TestLoginResetCounterUpdateErrorStillIssuesTokenService(t *testing.T) {
 	userRepo := newTestUserRepoService()
 	authService := service.NewAuthService(userRepo)
 
 	_ = authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", "Secret123!")
+	user, err := userRepo.FindByEmail(context.Background(), "alice@example.com")
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	user.FailedLoginCount = 1
+	user.FirstFailedAt = time.Now().Add(-time.Minute)
+	userRepo.byEmail[user.Email] = user
+	userRepo.byID[user.UserID] = user
+
 	userRepo.updateErr = errors.New("update failed")
-	_, err := authService.Login(context.Background(), "alice@example.com", "Secret123!")
-	if !errors.Is(err, service.ErrInvalidCredentials) {
-		t.Fatalf("expected %v, got %v", service.ErrInvalidCredentials, err)
+	tokens, err := authService.Login(context.Background(), "alice@example.com", "Secret123!")
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if tokens.AccessToken == "" || tokens.RefreshToken == "" {
+		t.Fatal("expected non-empty tokens")
 	}
 }
 
@@ -210,6 +222,39 @@ func TestValidateAccessTokenRejectRefreshService(t *testing.T) {
 		t.Fatalf("expected nil error, got %v", err)
 	}
 	if _, err := authService.ValidateAccessToken(tokens.RefreshToken); !errors.Is(err, service.ErrInvalidToken) {
+		t.Fatalf("expected %v, got %v", service.ErrInvalidToken, err)
+	}
+}
+
+func TestRefreshAccessSuccessService(t *testing.T) {
+	userRepo := newTestUserRepoService()
+	authService := service.NewAuthService(userRepo)
+
+	if err := authService.Register(context.Background(), "Alice Doe", "admin", "alice@example.com", "Secret123!"); err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	tokens, err := authService.Login(context.Background(), "alice@example.com", "Secret123!")
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+
+	access, err := authService.RefreshAccess(tokens.RefreshToken)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if access == "" {
+		t.Fatal("expected non-empty refreshed access token")
+	}
+	if _, err := authService.ValidateAccessToken(access); err != nil {
+		t.Fatalf("expected refreshed access token to be valid, got %v", err)
+	}
+}
+
+func TestRefreshAccessRejectsInvalidTokenService(t *testing.T) {
+	userRepo := newTestUserRepoService()
+	authService := service.NewAuthService(userRepo)
+
+	if _, err := authService.RefreshAccess("bad.token"); !errors.Is(err, service.ErrInvalidToken) {
 		t.Fatalf("expected %v, got %v", service.ErrInvalidToken, err)
 	}
 }

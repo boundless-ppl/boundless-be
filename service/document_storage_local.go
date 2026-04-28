@@ -70,7 +70,9 @@ func (s *LocalDocumentStorage) Upload(ctx context.Context, input UploadInput) (S
 	}
 
 	limited := io.LimitReader(src, MaxDocumentSizeBytes+1)
-	copied, err := io.Copy(dst, limited)
+	bufPtr := copyBufPool.Get().(*[]byte)
+	copied, err := io.CopyBuffer(dst, limited, *bufPtr)
+	copyBufPool.Put(bufPtr)
 	if err != nil {
 		return StoredObject{}, fmt.Errorf("copy file: %w", err)
 	}

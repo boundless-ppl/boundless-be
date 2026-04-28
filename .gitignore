@@ -7,3 +7,6 @@ coverage.out
 coverage.html
 *.test
 /.scannerwork
+/.claude
+/scripts
+/.gocache_local

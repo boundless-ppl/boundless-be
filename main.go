@@ -11,8 +11,10 @@ import (
 	"syscall"
 	"time"
 
+	"boundless-be/admin"
 	"boundless-be/api"
 	"boundless-be/database"
+	"boundless-be/debug"
 	"boundless-be/repository"
 	"boundless-be/service"
 
@@ -20,7 +22,7 @@ import (
 )
 
 func main() {
-	if err := godotenv.Overload(".env"); err != nil && !os.IsNotExist(err) {
+	if err := godotenv.Load(".env"); err != nil && !os.IsNotExist(err) {
 		log.Fatalf("failed to load .env: %v", err)
 	}
 
@@ -36,11 +38,15 @@ func main() {
 	univRepo := repository.NewUniversityRepository(db)
 	recRepo := repository.NewRecommendationRepository(db)
 	paymentRepo := repository.NewPaymentRepository(db)
+	dreamTrackerRepo := repository.NewDreamTrackerRepository(db)
+	scholarshipRepo := repository.NewScholarshipRepository(db)
 	handler := api.NewHandler(api.Dependencies{
-		UserRepo:    userRepo,
-		UnivRepo:    univRepo,
-		RecRepo:     recRepo,
-		PaymentRepo: paymentRepo,
+		UserRepo:         userRepo,
+		UnivRepo:         univRepo,
+		RecRepo:          recRepo,
+		PaymentRepo:      paymentRepo,
+		DreamTrackerRepo: dreamTrackerRepo,
+		ScholarshipRepo:  scholarshipRepo,
 	})
 
 	appCtx, cancel := context.WithCancel(context.Background())
@@ -82,10 +88,21 @@ func main() {
 		}
 	}
 
+	debug.StartPprofServer(os.Getenv("PPROF_ADDR"))
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
+
+	adminEngine, err := admin.Setup(handler, databaseURL, db)
+	if err != nil {
+		log.Printf("admin panel disabled: %v", err)
+	} else {
+		defer adminEngine.PostgresqlConnection().Close()
+		log.Printf("admin panel ready")
+	}
+
 	addr := ":" + port
 
 	srv := &http.Server{

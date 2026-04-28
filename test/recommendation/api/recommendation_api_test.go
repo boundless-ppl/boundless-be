@@ -88,6 +88,42 @@ func (f *fakeRecRepo) FindSubmissionDetail(ctx context.Context, submissionID, us
 	return f.detail, nil
 }
 
+func (f *fakeRecRepo) FindLatestCompletedSubmissionByTranscriptDocument(ctx context.Context, userID, documentID string) (repository.SubmissionDetail, error) {
+	return repository.SubmissionDetail{}, errs.ErrSubmissionNotFound
+}
+
+func (f *fakeRecRepo) FindMatchingPrograms(ctx context.Context, lookups []repository.RecommendationProgramLookup) ([]repository.RecommendationProgramMatch, error) {
+	return []repository.RecommendationProgramMatch{{
+		UniversityName: "University A",
+		ProgramName:    "CS",
+		ProgramID:      "program-university-a-cs",
+	}}, nil
+}
+
+func (f *fakeRecRepo) ListRecommendationCountryCodes(ctx context.Context) ([]string, error) {
+	return []string{"JP"}, nil
+}
+
+func (f *fakeRecRepo) FindRecommendationAllowedCandidates(ctx context.Context, preferredCountryCodes []string, limit int) ([]repository.RecommendationAllowedCandidate, error) {
+	return []repository.RecommendationAllowedCandidate{{
+		ProgramID:             "program-university-a-cs",
+		ProgramName:           "CS",
+		UniversityName:        "University A",
+		CountryCode:           "JP",
+		OfficialProgramURL:    "https://unia.example/cs",
+		OfficialUniversityURL: "https://unia.example",
+	}}, nil
+}
+
+func (f *fakeRecRepo) FindScholarshipMatches(ctx context.Context, programIDs []string) ([]repository.RecommendationScholarshipMatch, error) {
+	return []repository.RecommendationScholarshipMatch{{
+		ProgramID:       "program-university-a-cs",
+		ScholarshipName: "scholarship",
+		FundingID:       "funding-1",
+		AdmissionID:     "admission-1",
+	}}, nil
+}
+
 func setupHandler(t *testing.T, recRepo repository.RecommendationRepository) http.Handler {
 	t.Helper()
 	t.Setenv("AUTH_SECRET", "test-secret")
@@ -180,7 +216,7 @@ func TestCreateTranscriptRecommendationAPI(t *testing.T) {
 	aiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
-			"student_profile_summary":{"academic_background":"strong","experience_summary":"good","strengths":["analysis"],"improvement_areas":[],"preferred_themes":[],"raw_text":"summary"},
+			"student_profile_summary":{"academic_background":"strong","key_strengths":["analysis"],"considerations":[],"recommended_tracks":[],"language_evidence":"not_available"},
 			"top_recommendations":[
 				{
 					"rank":1,

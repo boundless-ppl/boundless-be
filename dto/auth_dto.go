@@ -33,6 +33,14 @@ type ChangePasswordRequest struct {
 	NewPassword     string `json:"new_password" binding:"required"`
 }
 
+type RefreshRequest struct {
+	RefreshToken string `json:"refresh_token" binding:"required"`
+}
+
+type RefreshResponse struct {
+	AccessToken string `json:"access_token"`
+}
+
 type MeResponse struct {
 	UserID         string  `json:"user_id"`
 	NamaLengkap    string  `json:"nama_lengkap"`

@@ -18,6 +18,8 @@ type RecommendationResultSet struct {
 type RecommendationResult struct {
 	RecResultID                    string
 	ResultSetID                    string
+	ProgramID                      *string
+	AdmissionID                    *string
 	RankNo                         int
 	UniversityName                 string
 	ProgramName                    string

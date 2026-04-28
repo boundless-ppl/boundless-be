@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
 	"time"
 
@@ -22,6 +23,7 @@ type AuthService interface {
 	Logout(token string) error
 	UpdateProfile(ctx context.Context, userID, namaLengkap string) error
 	ChangePassword(ctx context.Context, userID, currentPassword, newPassword string) error
+	RefreshAccess(refreshToken string) (string, error)
 }
 
 type PremiumRepository interface {
@@ -80,6 +82,7 @@ func (c *AuthController) Login(ctx *gin.Context) {
 			return
 		}
 
+		log.Printf("auth login failed for email %s: %v", req.Email, err)
 		ctx.JSON(http.StatusUnauthorized, dto.ErrorResponse{Error: "authentication failed"})
 		return
 	}
@@ -103,6 +106,22 @@ func (c *AuthController) Logout(ctx *gin.Context) {
 	}
 
 	ctx.Status(http.StatusNoContent)
+}
+
+func (c *AuthController) Refresh(ctx *gin.Context) {
+	var req dto.RefreshRequest
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: "invalid input"})
+		return
+	}
+
+	newAccessToken, err := c.authService.RefreshAccess(req.RefreshToken)
+	if err != nil {
+		ctx.JSON(http.StatusUnauthorized, dto.ErrorResponse{Error: "authentication failed"})
+		return
+	}
+
+	ctx.JSON(http.StatusOK, dto.RefreshResponse{AccessToken: newAccessToken})
 }
 
 func (c *AuthController) Me(ctx *gin.Context) {
@@ -130,8 +149,7 @@ func (c *AuthController) Me(ctx *gin.Context) {
 		premiumSub, err := c.premiumRepo.FindCurrentPremiumSubscription(ctx.Request.Context(), user.UserID, time.Now().UTC())
 		if err != nil {
 			if !errors.Is(err, errs.ErrPremiumSubscriptionNotFound) {
-				ctx.JSON(http.StatusInternalServerError, dto.ErrorResponse{Error: "internal server error"})
-				return
+				log.Printf("auth me premium lookup failed for user %s: %v", user.UserID, err)
 			}
 		} else {
 			response.IsPremium = true
