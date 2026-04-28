@@ -673,7 +673,7 @@ func TestMeShowsPendingPaymentAwaitingAdminVerificationController(t *testing.T) 
 		Email:       USER_EMAIL_ALICE,
 		Role:        "user",
 	}}
-	expiredAt := time.Date(2026, time.April, 16, 10, 0, 0, 0, time.UTC)
+	expiredAt := time.Now().UTC().Add(24 * time.Hour)
 	c := controller.NewAuthController(svc, repo, &fakePremiumRepository{currentPayment: model.Payment{
 		PaymentID:           "pay-1",
 		TransactionID:       "TX-1",
@@ -718,7 +718,7 @@ func TestMeIgnoresExpiredPendingPaymentController(t *testing.T) {
 		Email:       USER_EMAIL_ALICE,
 		Role:        "user",
 	}}
-	expiredAt := time.Date(2026, time.April, 14, 10, 0, 0, 0, time.UTC)
+	expiredAt := time.Now().UTC().Add(-24 * time.Hour)
 	c := controller.NewAuthController(svc, repo, &fakePremiumRepository{currentPayment: model.Payment{
 		PaymentID:           "pay-expired",
 		TransactionID:       "TX-EXPIRED",
@@ -760,7 +760,7 @@ func TestMeIgnoresPendingPaymentWithoutProofController(t *testing.T) {
 		Email:       USER_EMAIL_ALICE,
 		Role:        "user",
 	}}
-	expiredAt := time.Date(2026, time.April, 16, 10, 0, 0, 0, time.UTC)
+	expiredAt := time.Now().UTC().Add(24 * time.Hour)
 	c := controller.NewAuthController(svc, repo, &fakePremiumRepository{currentPayment: model.Payment{
 		PaymentID:           "pay-no-proof",
 		TransactionID:       "TX-NO-PROOF",
