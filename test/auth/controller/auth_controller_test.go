@@ -23,12 +23,14 @@ import (
 )
 
 type fakeAuthService struct {
-	registerErr error
-	loginTokens service.AuthTokens
-	loginErr    error
-	logoutErr   error
-	refreshOut  string
-	refreshErr  error
+	registerErr       error
+	loginTokens       service.AuthTokens
+	loginErr          error
+	logoutErr         error
+	updateProfileErr  error
+	changePasswordErr error
+	refreshOut        string
+	refreshErr        error
 }
 
 func (f *fakeAuthService) Register(ctx context.Context, fullName, role, email, password string) error {
@@ -41,6 +43,14 @@ func (f *fakeAuthService) Login(ctx context.Context, email, password string) (se
 
 func (f *fakeAuthService) Logout(token string) error {
 	return f.logoutErr
+}
+
+func (f *fakeAuthService) UpdateProfile(ctx context.Context, userID, namaLengkap string) error {
+	return f.updateProfileErr
+}
+
+func (f *fakeAuthService) ChangePassword(ctx context.Context, userID, currentPassword, newPassword string) error {
+	return f.changePasswordErr
 }
 
 func (f *fakeAuthService) RefreshAccess(refreshToken string) (string, error) {
@@ -412,5 +422,228 @@ func TestMeNonPremiumController(t *testing.T) {
 	}
 	if got.PremiumStartAt != nil || got.PremiumEndAt != nil {
 		t.Fatalf("expected nil premium dates, got %+v", got)
+	}
+}
+
+func TestUpdateProfileSuccessController(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &fakeAuthService{}
+	c := controller.NewAuthController(svc, &fakeUserRepository{}, nil)
+	router := gin.New()
+	router.PUT("/auth/me", func(ctx *gin.Context) {
+		ctx.Set(middleware.UserIDContextKey, "u-1")
+		ctx.Next()
+	}, c.UpdateProfile)
+
+	body, _ := json.Marshal(dto.UpdateProfileRequest{NamaLengkap: "Alice Updated"})
+	req := httptest.NewRequest(http.MethodPut, "/auth/me", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+}
+
+func TestUpdateProfileUnauthorizedWhenUserIDMissingController(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &fakeAuthService{}
+	c := controller.NewAuthController(svc, &fakeUserRepository{}, nil)
+	router := gin.New()
+	router.PUT("/auth/me", c.UpdateProfile)
+
+	body, _ := json.Marshal(dto.UpdateProfileRequest{NamaLengkap: "Alice Updated"})
+	req := httptest.NewRequest(http.MethodPut, "/auth/me", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, rec.Code)
+	}
+}
+
+func TestUpdateProfileInvalidBodyController(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &fakeAuthService{}
+	c := controller.NewAuthController(svc, &fakeUserRepository{}, nil)
+	router := gin.New()
+	router.PUT("/auth/me", func(ctx *gin.Context) {
+		ctx.Set(middleware.UserIDContextKey, "u-1")
+		ctx.Next()
+	}, c.UpdateProfile)
+
+	req := httptest.NewRequest(http.MethodPut, "/auth/me", bytes.NewBufferString("{invalid"))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
+	}
+}
+
+func TestUpdateProfileNotFoundController(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &fakeAuthService{updateProfileErr: repository.ErrUserNotFound}
+	c := controller.NewAuthController(svc, &fakeUserRepository{}, nil)
+	router := gin.New()
+	router.PUT("/auth/me", func(ctx *gin.Context) {
+		ctx.Set(middleware.UserIDContextKey, "u-missing")
+		ctx.Next()
+	}, c.UpdateProfile)
+
+	body, _ := json.Marshal(dto.UpdateProfileRequest{NamaLengkap: "Alice Updated"})
+	req := httptest.NewRequest(http.MethodPut, "/auth/me", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected status %d, got %d", http.StatusNotFound, rec.Code)
+	}
+}
+
+func TestUpdateProfileInternalErrorController(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &fakeAuthService{updateProfileErr: errors.New("unexpected")}
+	c := controller.NewAuthController(svc, &fakeUserRepository{}, nil)
+	router := gin.New()
+	router.PUT("/auth/me", func(ctx *gin.Context) {
+		ctx.Set(middleware.UserIDContextKey, "u-1")
+		ctx.Next()
+	}, c.UpdateProfile)
+
+	body, _ := json.Marshal(dto.UpdateProfileRequest{NamaLengkap: "Alice Updated"})
+	req := httptest.NewRequest(http.MethodPut, "/auth/me", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status %d, got %d", http.StatusInternalServerError, rec.Code)
+	}
+}
+
+func TestChangePasswordSuccessController(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &fakeAuthService{}
+	c := controller.NewAuthController(svc, &fakeUserRepository{}, nil)
+	router := gin.New()
+	router.PUT("/auth/me/password", func(ctx *gin.Context) {
+		ctx.Set(middleware.UserIDContextKey, "u-1")
+		ctx.Next()
+	}, c.ChangePassword)
+
+	body, _ := json.Marshal(dto.ChangePasswordRequest{CurrentPassword: "OldPass1!", NewPassword: "NewPass1!"})
+	req := httptest.NewRequest(http.MethodPut, "/auth/me/password", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+}
+
+func TestChangePasswordUnauthorizedWhenUserIDMissingController(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &fakeAuthService{}
+	c := controller.NewAuthController(svc, &fakeUserRepository{}, nil)
+	router := gin.New()
+	router.PUT("/auth/me/password", c.ChangePassword)
+
+	body, _ := json.Marshal(dto.ChangePasswordRequest{CurrentPassword: "OldPass1!", NewPassword: "NewPass1!"})
+	req := httptest.NewRequest(http.MethodPut, "/auth/me/password", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, rec.Code)
+	}
+}
+
+func TestChangePasswordInvalidBodyController(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &fakeAuthService{}
+	c := controller.NewAuthController(svc, &fakeUserRepository{}, nil)
+	router := gin.New()
+	router.PUT("/auth/me/password", func(ctx *gin.Context) {
+		ctx.Set(middleware.UserIDContextKey, "u-1")
+		ctx.Next()
+	}, c.ChangePassword)
+
+	req := httptest.NewRequest(http.MethodPut, "/auth/me/password", bytes.NewBufferString("{invalid"))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
+	}
+}
+
+func TestChangePasswordWrongCurrentPasswordController(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &fakeAuthService{changePasswordErr: service.ErrWrongCurrentPassword}
+	c := controller.NewAuthController(svc, &fakeUserRepository{}, nil)
+	router := gin.New()
+	router.PUT("/auth/me/password", func(ctx *gin.Context) {
+		ctx.Set(middleware.UserIDContextKey, "u-1")
+		ctx.Next()
+	}, c.ChangePassword)
+
+	body, _ := json.Marshal(dto.ChangePasswordRequest{CurrentPassword: "WrongPass1!", NewPassword: "NewPass1!"})
+	req := httptest.NewRequest(http.MethodPut, "/auth/me/password", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, rec.Code)
+	}
+}
+
+func TestChangePasswordInvalidNewPasswordController(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &fakeAuthService{changePasswordErr: service.ErrInvalidInput}
+	c := controller.NewAuthController(svc, &fakeUserRepository{}, nil)
+	router := gin.New()
+	router.PUT("/auth/me/password", func(ctx *gin.Context) {
+		ctx.Set(middleware.UserIDContextKey, "u-1")
+		ctx.Next()
+	}, c.ChangePassword)
+
+	body, _ := json.Marshal(dto.ChangePasswordRequest{CurrentPassword: "OldPass1!", NewPassword: "weak"})
+	req := httptest.NewRequest(http.MethodPut, "/auth/me/password", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
+	}
+}
+
+func TestChangePasswordInternalErrorController(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &fakeAuthService{changePasswordErr: errors.New("unexpected")}
+	c := controller.NewAuthController(svc, &fakeUserRepository{}, nil)
+	router := gin.New()
+	router.PUT("/auth/me/password", func(ctx *gin.Context) {
+		ctx.Set(middleware.UserIDContextKey, "u-1")
+		ctx.Next()
+	}, c.ChangePassword)
+
+	body, _ := json.Marshal(dto.ChangePasswordRequest{CurrentPassword: "OldPass1!", NewPassword: "NewPass1!"})
+	req := httptest.NewRequest(http.MethodPut, "/auth/me/password", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status %d, got %d", http.StatusInternalServerError, rec.Code)
 	}
 }

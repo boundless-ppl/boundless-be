@@ -21,6 +21,8 @@ type AuthService interface {
 	Register(ctx context.Context, fullName, role, email, password string) error
 	Login(ctx context.Context, email, password string) (service.AuthTokens, error)
 	Logout(token string) error
+	UpdateProfile(ctx context.Context, userID, namaLengkap string) error
+	ChangePassword(ctx context.Context, userID, currentPassword, newPassword string) error
 	RefreshAccess(refreshToken string) (string, error)
 }
 
@@ -159,4 +161,59 @@ func (c *AuthController) Me(ctx *gin.Context) {
 	}
 
 	ctx.JSON(http.StatusOK, response)
+}
+
+func (c *AuthController) UpdateProfile(ctx *gin.Context) {
+	userID, exists := ctx.Get(middleware.UserIDContextKey)
+	if !exists {
+		ctx.JSON(http.StatusUnauthorized, dto.ErrorResponse{Error: "authentication failed"})
+		return
+	}
+
+	var req dto.UpdateProfileRequest
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: "invalid input"})
+		return
+	}
+
+	if err := c.authService.UpdateProfile(ctx.Request.Context(), userID.(string), req.NamaLengkap); err != nil {
+		switch {
+		case errors.Is(err, repository.ErrUserNotFound):
+			ctx.JSON(http.StatusNotFound, dto.ErrorResponse{Error: "user not found"})
+		default:
+			ctx.JSON(http.StatusInternalServerError, dto.ErrorResponse{Error: "request failed"})
+		}
+		return
+	}
+
+	ctx.JSON(http.StatusOK, dto.MessageResponse{Message: "profile updated successfully"})
+}
+
+func (c *AuthController) ChangePassword(ctx *gin.Context) {
+	userID, exists := ctx.Get(middleware.UserIDContextKey)
+	if !exists {
+		ctx.JSON(http.StatusUnauthorized, dto.ErrorResponse{Error: "authentication failed"})
+		return
+	}
+
+	var req dto.ChangePasswordRequest
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: "invalid input"})
+		return
+	}
+
+	err := c.authService.ChangePassword(ctx.Request.Context(), userID.(string), req.CurrentPassword, req.NewPassword)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrWrongCurrentPassword):
+			ctx.JSON(http.StatusUnauthorized, dto.ErrorResponse{Error: "wrong current password"})
+		case errors.Is(err, service.ErrInvalidInput):
+			ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: "invalid input"})
+		default:
+			ctx.JSON(http.StatusInternalServerError, dto.ErrorResponse{Error: "request failed"})
+		}
+		return
+	}
+
+	ctx.JSON(http.StatusOK, dto.MessageResponse{Message: "password changed successfully"})
 }
