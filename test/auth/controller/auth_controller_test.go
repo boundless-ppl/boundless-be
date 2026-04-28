@@ -61,6 +61,8 @@ type fakeUserRepository struct {
 type fakePremiumRepository struct {
 	currentSubscription model.UserSubscription
 	currentErr          error
+	currentPayment      model.Payment
+	currentPaymentErr   error
 }
 
 func (f *fakeUserRepository) Create(ctx context.Context, user model.User) (model.User, error) {
@@ -95,6 +97,16 @@ func (f *fakePremiumRepository) FindCurrentPremiumSubscription(ctx context.Conte
 	return f.currentSubscription, nil
 }
 
+func (f *fakePremiumRepository) FindLatestPendingPaymentByUser(ctx context.Context, userID string, reference time.Time) (model.Payment, error) {
+	if f.currentPaymentErr != nil {
+		return model.Payment{}, f.currentPaymentErr
+	}
+	if f.currentPayment.PaymentID == "" {
+		return model.Payment{}, errs.ErrPaymentNotFound
+	}
+	return f.currentPayment, nil
+}
+
 func TestRegisterSuccessController(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	svc := &fakeAuthService{}
@@ -102,7 +114,7 @@ func TestRegisterSuccessController(t *testing.T) {
 	router := gin.New()
 	router.POST("/auth/register", c.Register)
 
-	body, _ := json.Marshal(dto.RegisterRequest{NamaLengkap: "Alice Doe", Email: "alice@example.com", Password: "Secret123!"})
+	body, _ := json.Marshal(dto.RegisterRequest{NamaLengkap: "Alice Doe", Email: USER_EMAIL_ALICE, Password: "Secret123!"})
 	req := httptest.NewRequest(http.MethodPost, "/auth/register", bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -137,7 +149,7 @@ func TestRegisterDuplicateEmailController(t *testing.T) {
 	router := gin.New()
 	router.POST("/auth/register", c.Register)
 
-	body, _ := json.Marshal(dto.RegisterRequest{NamaLengkap: "Alice Doe", Email: "alice@example.com", Password: "Secret123!"})
+	body, _ := json.Marshal(dto.RegisterRequest{NamaLengkap: "Alice Doe", Email: USER_EMAIL_ALICE, Password: "Secret123!"})
 	req := httptest.NewRequest(http.MethodPost, "/auth/register", bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -155,7 +167,7 @@ func TestLoginSuccessController(t *testing.T) {
 	router := gin.New()
 	router.POST("/auth/login", c.Login)
 
-	body, _ := json.Marshal(dto.LoginRequest{Email: "alice@example.com", Password: "Secret123!"})
+	body, _ := json.Marshal(dto.LoginRequest{Email: USER_EMAIL_ALICE, Password: "Secret123!"})
 	req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -180,7 +192,7 @@ func TestLoginInvalidCredentialsController(t *testing.T) {
 	router := gin.New()
 	router.POST("/auth/login", c.Login)
 
-	body, _ := json.Marshal(dto.LoginRequest{Email: "alice@example.com", Password: "wrong"})
+	body, _ := json.Marshal(dto.LoginRequest{Email: USER_EMAIL_ALICE, Password: "wrong"})
 	req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -289,13 +301,17 @@ func TestRefreshUnauthorizedController(t *testing.T) {
 	}
 }
 
+const ROUTE_AUTH_ME = "/auth/me"
+const THE_SCHOLAR = "The Scholar"
+const USER_EMAIL_ALICE = "alice@example.com"
+
 func TestMeSuccessController(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	svc := &fakeAuthService{}
 	repo := &fakeUserRepository{findByIDUser: model.User{
 		UserID:      "u-1",
 		NamaLengkap: "Alice Doe",
-		Email:       "alice@example.com",
+		Email:       USER_EMAIL_ALICE,
 		Role:        "admin",
 	}}
 	c := controller.NewAuthController(svc, repo, &fakePremiumRepository{currentSubscription: model.UserSubscription{
@@ -303,18 +319,18 @@ func TestMeSuccessController(t *testing.T) {
 		UserID:              "u-1",
 		SubscriptionID:      "sub-1",
 		SourcePaymentID:     "pay-1",
-		PackageNameSnapshot: "The Scholar",
+		PackageNameSnapshot: THE_SCHOLAR,
 		StartDate:           time.Date(2026, time.April, 1, 0, 0, 0, 0, time.UTC),
 		EndDate:             time.Date(2026, time.April, 30, 23, 59, 59, 0, time.UTC),
 		CreatedAt:           time.Date(2026, time.April, 1, 0, 0, 0, 0, time.UTC),
 	}})
 	router := gin.New()
-	router.GET("/auth/me", func(ctx *gin.Context) {
+	router.GET(ROUTE_AUTH_ME, func(ctx *gin.Context) {
 		ctx.Set(middleware.UserIDContextKey, "u-1")
 		ctx.Next()
 	}, c.Me)
 
-	req := httptest.NewRequest(http.MethodGet, "/auth/me", nil)
+	req := httptest.NewRequest(http.MethodGet, ROUTE_AUTH_ME, nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -330,8 +346,8 @@ func TestMeSuccessController(t *testing.T) {
 	if got.UserID != "u-1" {
 		t.Fatalf("expected user_id u-1, got %s", got.UserID)
 	}
-	if got.Email != "alice@example.com" {
-		t.Fatalf("expected email alice@example.com, got %s", got.Email)
+	if got.Email != USER_EMAIL_ALICE {
+		t.Fatalf("expected email %s, got %s", USER_EMAIL_ALICE, got.Email)
 	}
 	if got.Role != "admin" {
 		t.Fatalf("expected role admin, got %s", got.Role)
@@ -349,9 +365,9 @@ func TestMeUnauthorizedWhenUserIDMissingController(t *testing.T) {
 	svc := &fakeAuthService{}
 	c := controller.NewAuthController(svc, &fakeUserRepository{}, nil)
 	router := gin.New()
-	router.GET("/auth/me", c.Me)
+	router.GET(ROUTE_AUTH_ME, c.Me)
 
-	req := httptest.NewRequest(http.MethodGet, "/auth/me", nil)
+	req := httptest.NewRequest(http.MethodGet, ROUTE_AUTH_ME, nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -365,12 +381,12 @@ func TestMeUnauthorizedWhenUserNotFoundController(t *testing.T) {
 	svc := &fakeAuthService{}
 	c := controller.NewAuthController(svc, &fakeUserRepository{findByIDErr: repository.ErrUserNotFound}, nil)
 	router := gin.New()
-	router.GET("/auth/me", func(ctx *gin.Context) {
+	router.GET(ROUTE_AUTH_ME, func(ctx *gin.Context) {
 		ctx.Set(middleware.UserIDContextKey, "u-missing")
 		ctx.Next()
 	}, c.Me)
 
-	req := httptest.NewRequest(http.MethodGet, "/auth/me", nil)
+	req := httptest.NewRequest(http.MethodGet, ROUTE_AUTH_ME, nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -390,12 +406,12 @@ func TestMeNonPremiumController(t *testing.T) {
 	}}
 	c := controller.NewAuthController(svc, repo, &fakePremiumRepository{currentErr: errs.ErrPremiumSubscriptionNotFound})
 	router := gin.New()
-	router.GET("/auth/me", func(ctx *gin.Context) {
+	router.GET(ROUTE_AUTH_ME, func(ctx *gin.Context) {
 		ctx.Set(middleware.UserIDContextKey, "u-2")
 		ctx.Next()
 	}, c.Me)
 
-	req := httptest.NewRequest(http.MethodGet, "/auth/me", nil)
+	req := httptest.NewRequest(http.MethodGet, ROUTE_AUTH_ME, nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -413,4 +429,136 @@ func TestMeNonPremiumController(t *testing.T) {
 	if got.PremiumStartAt != nil || got.PremiumEndAt != nil {
 		t.Fatalf("expected nil premium dates, got %+v", got)
 	}
+}
+
+func TestMeShowsPendingPaymentAwaitingAdminVerificationController(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &fakeAuthService{}
+	repo := &fakeUserRepository{findByIDUser: model.User{
+		UserID:      "u-4",
+		NamaLengkap: "Alice",
+		Email:       USER_EMAIL_ALICE,
+		Role:        "user",
+	}}
+	expiredAt := time.Date(2026, time.April, 16, 10, 0, 0, 0, time.UTC)
+	c := controller.NewAuthController(svc, repo, &fakePremiumRepository{currentPayment: model.Payment{
+		PaymentID:           "pay-1",
+		TransactionID:       "TX-1",
+		UserID:              "u-4",
+		PackageNameSnapshot: THE_SCHOLAR,
+		Status:              model.PaymentStatusPending,
+		ExpiredAt:           &expiredAt,
+		ProofDocumentID:     ptrString("doc-1"),
+	}})
+	router := gin.New()
+	router.GET(ROUTE_AUTH_ME, func(ctx *gin.Context) {
+		ctx.Set(middleware.UserIDContextKey, "u-4")
+		ctx.Next()
+	}, c.Me)
+
+	req := httptest.NewRequest(http.MethodGet, ROUTE_AUTH_ME, nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+
+	var got dto.MeResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if !got.HasPendingPayment {
+		t.Fatal("expected pending payment flag")
+	}
+	if got.TransactionID == nil || *got.TransactionID != "TX-1" {
+		t.Fatalf("expected transaction id TX-1, got %+v", got.TransactionID)
+	}
+}
+
+func TestMeIgnoresExpiredPendingPaymentController(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &fakeAuthService{}
+	repo := &fakeUserRepository{findByIDUser: model.User{
+		UserID:      "u-5",
+		NamaLengkap: "Alice",
+		Email:       USER_EMAIL_ALICE,
+		Role:        "user",
+	}}
+	expiredAt := time.Date(2026, time.April, 14, 10, 0, 0, 0, time.UTC)
+	c := controller.NewAuthController(svc, repo, &fakePremiumRepository{currentPayment: model.Payment{
+		PaymentID:           "pay-expired",
+		TransactionID:       "TX-EXPIRED",
+		UserID:              "u-5",
+		PackageNameSnapshot: THE_SCHOLAR,
+		Status:              model.PaymentStatusPending,
+		ExpiredAt:           &expiredAt,
+		ProofDocumentID:     ptrString("doc-2"),
+	}})
+	router := gin.New()
+	router.GET(ROUTE_AUTH_ME, func(ctx *gin.Context) {
+		ctx.Set(middleware.UserIDContextKey, "u-5")
+		ctx.Next()
+	}, c.Me)
+
+	req := httptest.NewRequest(http.MethodGet, ROUTE_AUTH_ME, nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+
+	var got dto.MeResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if got.HasPendingPayment {
+		t.Fatalf("expected expired pending payment to be ignored, got %+v", got)
+	}
+}
+
+func TestMeIgnoresPendingPaymentWithoutProofController(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &fakeAuthService{}
+	repo := &fakeUserRepository{findByIDUser: model.User{
+		UserID:      "u-6",
+		NamaLengkap: "Alice",
+		Email:       USER_EMAIL_ALICE,
+		Role:        "user",
+	}}
+	expiredAt := time.Date(2026, time.April, 16, 10, 0, 0, 0, time.UTC)
+	c := controller.NewAuthController(svc, repo, &fakePremiumRepository{currentPayment: model.Payment{
+		PaymentID:           "pay-no-proof",
+		TransactionID:       "TX-NO-PROOF",
+		UserID:              "u-6",
+		PackageNameSnapshot: THE_SCHOLAR,
+		Status:              model.PaymentStatusPending,
+		ExpiredAt:           &expiredAt,
+	}})
+	router := gin.New()
+	router.GET(ROUTE_AUTH_ME, func(ctx *gin.Context) {
+		ctx.Set(middleware.UserIDContextKey, "u-6")
+		ctx.Next()
+	}, c.Me)
+
+	req := httptest.NewRequest(http.MethodGet, ROUTE_AUTH_ME, nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+
+	var got dto.MeResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if got.HasPendingPayment {
+		t.Fatalf("expected pending payment without proof to be ignored, got %+v", got)
+	}
+}
+
+func ptrString(value string) *string {
+	return &value
 }

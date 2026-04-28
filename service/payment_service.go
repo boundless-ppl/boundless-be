@@ -254,7 +254,7 @@ func (s *PaymentService) UploadProofForPayment(ctx context.Context, userID, paym
 	if err != nil {
 		return model.Document{}, err
 	}
-	if payment.Status != model.PaymentStatusPending {
+	if payment.Status != model.PaymentStatusPending || (payment.ExpiredAt != nil && !payment.ExpiredAt.After(time.Now().UTC())) {
 		return model.Document{}, errs.ErrPaymentNotPending
 	}
 
