@@ -9,14 +9,15 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func registerAuthRoutes(router *gin.Engine, userRepo repository.UserRepository, paymentRepo repository.PaymentRepository) {
+func registerAuthRoutes(router *gin.Engine, userRepo repository.UserRepository, paymentRepo repository.PaymentRepository, authLimiter *middleware.RateLimiter) {
 	authService := service.NewAuthService(userRepo)
 	authController := controller.NewAuthController(authService, userRepo, paymentRepo)
 	authMiddleware := middleware.NewAuthMiddleware(authService)
 
-	router.POST("/auth/register", authController.Register)
-	router.POST("/auth/login", authController.Login)
-	router.POST("/auth/refresh", authController.Refresh)
+	strictLimit := authLimiter.Limit()
+	router.POST("/auth/register", strictLimit, authController.Register)
+	router.POST("/auth/login", strictLimit, authController.Login)
+	router.POST("/auth/refresh", strictLimit, authController.Refresh)
 	router.POST("/auth/logout", authMiddleware.RequireAuth(), authController.Logout)
 	router.GET("/auth/me", authMiddleware.RequireAuth(), authController.Me)
 }

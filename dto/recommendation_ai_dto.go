@@ -3,28 +3,45 @@ package dto
 import "mime/multipart"
 
 type AIProfileRecommendationRequest struct {
-	TranscriptFile *multipart.FileHeader
-	CVFile         *multipart.FileHeader
-	Preferences    RecommendationPreferenceInput
+	TranscriptFile    *multipart.FileHeader
+	CVFile            *multipart.FileHeader
+	Preferences       RecommendationPreferenceInput
+	AllowedCandidates []AIAllowedCandidate
 }
 
 type AITranscriptRecommendationRequest struct {
-	TranscriptFile *multipart.FileHeader
-	Preferences    RecommendationPreferenceInput
+	TranscriptFile    *multipart.FileHeader
+	Preferences       RecommendationPreferenceInput
+	AllowedCandidates []AIAllowedCandidate
 }
 
 type AICVRecommendationRequest struct {
-	CVFile      *multipart.FileHeader
-	Preferences RecommendationPreferenceInput
+	CVFile            *multipart.FileHeader
+	Preferences       RecommendationPreferenceInput
+	AllowedCandidates []AIAllowedCandidate
+}
+
+type AIAllowedCandidate struct {
+	ProgramID             string   `json:"program_id"`
+	ProgramName           string   `json:"program_name"`
+	UniversityName        string   `json:"university_name"`
+	Country               string   `json:"country"`
+	DegreeLevel           string   `json:"degree_level,omitempty"`
+	Language              string   `json:"language,omitempty"`
+	FocusTags             []string `json:"focus_tags,omitempty"`
+	FundingSummary        []string `json:"funding_summary,omitempty"`
+	AdmissionDeadline     string   `json:"admission_deadline,omitempty"`
+	OfficialProgramURL    string   `json:"official_program_url,omitempty"`
+	OfficialUniversityURL string   `json:"official_university_url,omitempty"`
 }
 
 type GlobalMatchAIStudentProfileSummaryResponse struct {
 	AcademicBackground string   `json:"academic_background"`
-	ExperienceSummary  string   `json:"experience_summary"`
-	Strengths          []string `json:"strengths"`
-	ImprovementAreas   []string `json:"improvement_areas"`
-	PreferredThemes    []string `json:"preferred_themes"`
-	RawText            string   `json:"raw_text"`
+	KeyStrengths       []string `json:"key_strengths"`
+	Considerations     []string `json:"considerations"`
+	RecommendedTracks  []string `json:"recommended_tracks"`
+	LanguageEvidence   string   `json:"language_evidence"`
+	EvidenceConfidence string   `json:"evidence_confidence"`
 }
 
 type GlobalMatchAIScoreBreakdownResponse struct {
@@ -35,10 +52,12 @@ type GlobalMatchAIScoreBreakdownResponse struct {
 }
 
 type GlobalMatchAIScholarshipRecommendationResponse struct {
-	ScholarshipName string `json:"scholarship_name"`
-	CoverageSummary string `json:"coverage_summary"`
-	Selectivity     string `json:"selectivity"`
-	EligibilityHint string `json:"eligibility_hint"`
+	ScholarshipName string  `json:"scholarship_name"`
+	CoverageSummary string  `json:"coverage_summary"`
+	Selectivity     string  `json:"selectivity"`
+	EligibilityHint string  `json:"eligibility_hint"`
+	FundingID       *string `json:"funding_id,omitempty"`
+	AdmissionID     *string `json:"admission_id,omitempty"`
 }
 
 type GlobalMatchAIApplicationStrategyResponse struct {

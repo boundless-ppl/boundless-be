@@ -51,7 +51,7 @@ func TestNewConnectionSuccessfulPing(t *testing.T) {
 	}
 	defer func() { databaseOpenDB = origOpenDB }()
 
-	db, err := NewConnection("postgres://user:pass@localhost:5432/db")
+	db, err := NewConnection("host=localhost port=5432 dbname=db sslmode=disable")
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}

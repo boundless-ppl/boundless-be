@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"mime/multipart"
 	"os"
 	"strings"
@@ -22,8 +23,9 @@ const (
 )
 
 type PaymentService struct {
-	repo    repository.PaymentRepository
-	storage DocumentStorage
+	repo     repository.PaymentRepository
+	storage  DocumentStorage
+	notifier *PaymentNotificationService
 }
 
 type CreatePaymentOutput struct {
@@ -48,8 +50,9 @@ type AdminUpdatePaymentStatusOutput struct {
 
 func NewPaymentService(repo repository.PaymentRepository) *PaymentService {
 	return &PaymentService{
-		repo:    repo,
-		storage: mustBuildDocumentStorage(),
+		repo:     repo,
+		storage:  mustBuildDocumentStorage(),
+		notifier: buildPaymentNotifierFromEnv(repo),
 	}
 }
 
@@ -58,8 +61,9 @@ func NewPaymentServiceWithDeps(repo repository.PaymentRepository, storage Docume
 		storage = mustBuildDocumentStorage()
 	}
 	return &PaymentService{
-		repo:    repo,
-		storage: storage,
+		repo:     repo,
+		storage:  storage,
+		notifier: buildPaymentNotifierFromEnv(repo),
 	}
 }
 
@@ -284,7 +288,33 @@ func (s *PaymentService) UploadProofForPayment(ctx context.Context, userID, paym
 		return model.Document{}, err
 	}
 
+	if s.notifier != nil {
+		go func() {
+			notifyCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+
+			if err := s.notifier.RunOnce(notifyCtx); err != nil {
+				log.Printf("payment immediate notifier failed: %v", err)
+			}
+		}()
+	}
+
 	return created, nil
+}
+
+func buildPaymentNotifierFromEnv(repo repository.PaymentRepository) *PaymentNotificationService {
+	adminEmail := strings.TrimSpace(os.Getenv("PAYMENT_ADMIN_EMAIL"))
+	if adminEmail == "" {
+		return nil
+	}
+
+	sender, err := NewSMTPEmailSenderFromEnv()
+	if err != nil {
+		log.Printf("payment immediate notifier disabled: %v", err)
+		return nil
+	}
+
+	return NewPaymentNotificationService(repo, sender, adminEmail)
 }
 
 func (s *PaymentService) resolvePaymentStartDate(ctx context.Context, paymentID string, requestedStartDate *string) (time.Time, error) {

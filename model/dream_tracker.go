@@ -19,6 +19,7 @@ const (
 	DreamRequirementStatusVerified            DreamRequirementStatusValue = "VERIFIED"
 	DreamRequirementStatusVerifiedWithWarning DreamRequirementStatusValue = "VERIFIED_WITH_WARNING"
 	DreamRequirementStatusRejected            DreamRequirementStatusValue = "REJECTED"
+	DreamRequirementStatusNeedsReview         DreamRequirementStatusValue = "NEEDS_REVIEW"
 	DreamRequirementStatusReused              DreamRequirementStatusValue = "REUSED"
 )
 

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"boundless-be/middleware"
 	"boundless-be/repository"
 	"os"
 	"strings"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"golang.org/x/time/rate"
 )
 
 type Dependencies struct {
@@ -16,12 +18,18 @@ type Dependencies struct {
 	RecRepo          repository.RecommendationRepository
 	PaymentRepo      repository.PaymentRepository
 	DreamTrackerRepo repository.DreamTrackerRepository
+	ScholarshipRepo  repository.ScholarshipRepository
 }
 
 func NewHandler(dep Dependencies) *gin.Engine {
 	router := gin.New()
+	router.MaxMultipartMemory = 1 << 20
 	origins := normalizeAllowedOrigins(os.Getenv("CORS_ALLOWED_ORIGINS"))
 	router.Use(gin.Recovery())
+
+	// Global: 60 req/min per IP, burst 20.
+	globalLimiter := middleware.NewRateLimiter(rate.Limit(1), 20)
+	router.Use(globalLimiter.Limit())
 
 	router.Use(cors.New(cors.Config{
 		AllowOrigins:     origins,
@@ -38,7 +46,9 @@ func NewHandler(dep Dependencies) *gin.Engine {
 		ctx.Status(204)
 	})
 
-	registerAuthRoutes(router, dep.UserRepo, dep.PaymentRepo)
+	// Stricter: 10 req/min per IP on unauthenticated auth endpoints, burst 5.
+	authLimiter := middleware.NewRateLimiter(rate.Limit(10.0/60), 5)
+	registerAuthRoutes(router, dep.UserRepo, dep.PaymentRepo, authLimiter)
 
 	if dep.UnivRepo != nil {
 		registerUnivRoutes(router, dep.UnivRepo)
@@ -54,6 +64,10 @@ func NewHandler(dep Dependencies) *gin.Engine {
 
 	if dep.DreamTrackerRepo != nil && dep.UserRepo != nil {
 		registerDreamTrackerRoutes(router, dep.DreamTrackerRepo, dep.UserRepo)
+	}
+
+	if dep.ScholarshipRepo != nil {
+		registerScholarshipRoutes(router, dep.ScholarshipRepo)
 	}
 
 	return router

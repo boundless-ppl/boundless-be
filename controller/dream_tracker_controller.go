@@ -66,6 +66,7 @@ func (c *DreamTrackerController) CreateDreamTracker(ctx *gin.Context) {
 		ProgramID:         req.ProgramID,
 		AdmissionID:       req.AdmissionID,
 		FundingID:         req.FundingID,
+		ScholarshipName:   req.ScholarshipName,
 		Title:             req.Title,
 		Status:            req.Status,
 		SourceType:        req.SourceType,
@@ -249,7 +250,7 @@ func (c *DreamTrackerController) SubmitDreamRequirement(ctx *gin.Context) {
 	requirementID := ctx.Param("id")
 	if _, err := uuid.Parse(requirementID); err != nil {
 		ctx.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: dreamTrackerInvalidIDFormatMessage})
-		return
+		return 
 	}
 
 	var req dto.SubmitDreamRequirementRequest

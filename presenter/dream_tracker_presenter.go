@@ -174,6 +174,8 @@ func (DefaultRequirementStatusPolicy) Present(status model.DreamRequirementStatu
 	switch status {
 	case model.DreamRequirementStatusRejected:
 		return StatusPresentation{Label: "Ditolak", Variant: "ERROR"}
+	case model.DreamRequirementStatusNeedsReview:
+		return StatusPresentation{Label: "Perlu verifikasi ulang", Variant: "WARNING"}
 	case model.DreamRequirementStatusReviewing:
 		return StatusPresentation{Label: "Sedang diperiksa", Variant: "IN_PROGRESS"}
 	case model.DreamRequirementStatusReused:

@@ -14,6 +14,7 @@ import (
 	"boundless-be/admin"
 	"boundless-be/api"
 	"boundless-be/database"
+	"boundless-be/debug"
 	"boundless-be/repository"
 	"boundless-be/service"
 
@@ -38,12 +39,14 @@ func main() {
 	recRepo := repository.NewRecommendationRepository(db)
 	paymentRepo := repository.NewPaymentRepository(db)
 	dreamTrackerRepo := repository.NewDreamTrackerRepository(db)
+	scholarshipRepo := repository.NewScholarshipRepository(db)
 	handler := api.NewHandler(api.Dependencies{
 		UserRepo:         userRepo,
 		UnivRepo:         univRepo,
 		RecRepo:          recRepo,
 		PaymentRepo:      paymentRepo,
 		DreamTrackerRepo: dreamTrackerRepo,
+		ScholarshipRepo:  scholarshipRepo,
 	})
 
 	appCtx, cancel := context.WithCancel(context.Background())
@@ -84,6 +87,8 @@ func main() {
 			}()
 		}
 	}
+
+	debug.StartPprofServer(os.Getenv("PPROF_ADDR"))
 
 	port := os.Getenv("PORT")
 	if port == "" {

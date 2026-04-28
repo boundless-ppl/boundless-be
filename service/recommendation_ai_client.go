@@ -73,6 +73,7 @@ func (c *HTTPRecommendationAIClient) RecommendProfile(ctx context.Context, req d
 			{FieldName: "cv_file", Header: req.CVFile},
 		},
 		req.Preferences,
+		req.AllowedCandidates,
 	)
 }
 
@@ -84,6 +85,7 @@ func (c *HTTPRecommendationAIClient) RecommendTranscript(ctx context.Context, re
 			{FieldName: "file", Header: req.TranscriptFile},
 		},
 		req.Preferences,
+		req.AllowedCandidates,
 	)
 }
 
@@ -95,6 +97,7 @@ func (c *HTTPRecommendationAIClient) RecommendCV(ctx context.Context, req dto.AI
 			{FieldName: "file", Header: req.CVFile},
 		},
 		req.Preferences,
+		req.AllowedCandidates,
 	)
 }
 
@@ -108,8 +111,9 @@ func (c *HTTPRecommendationAIClient) doMultipartRecommendation(
 	path string,
 	files []multipartFilePart,
 	preferences dto.RecommendationPreferenceInput,
+	allowedCandidates []dto.AIAllowedCandidate,
 ) (dto.GlobalMatchAIRecommendationResponse, error) {
-	requestBody, contentType, err := buildRecommendationMultipartBody(files, preferences)
+	requestBody, contentType, err := buildRecommendationMultipartBody(files, preferences, allowedCandidates)
 	if err != nil {
 		return dto.GlobalMatchAIRecommendationResponse{}, err
 	}
@@ -142,6 +146,7 @@ func (c *HTTPRecommendationAIClient) doMultipartRecommendation(
 func buildRecommendationMultipartBody(
 	files []multipartFilePart,
 	preferences dto.RecommendationPreferenceInput,
+	allowedCandidates []dto.AIAllowedCandidate,
 ) ([]byte, string, error) {
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
@@ -178,6 +183,13 @@ func buildRecommendationMultipartBody(
 	writeMultiValueField(writer, "scholarship_types", preferences.ScholarshipTypes)
 	writeMultiValueField(writer, "start_periods", preferences.StartPeriods)
 	writeSingleValueField(writer, "additional_preference", preferences.AdditionalPreference)
+	if len(allowedCandidates) > 0 {
+		payload, err := json.Marshal(allowedCandidates)
+		if err != nil {
+			return nil, "", fmt.Errorf("marshal allowed candidates: %w", err)
+		}
+		writeSingleValueField(writer, "allowed_candidates_json", string(payload))
+	}
 
 	if err := writer.Close(); err != nil {
 		return nil, "", fmt.Errorf("close multipart writer: %w", err)

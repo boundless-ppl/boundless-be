@@ -1,13 +1,228 @@
-stages:
-  - sonar
+default:
+  image: golang:1.24
 
-sonarcloud:
-  stage: sonar
+variables:
+  GOMODCACHE: "$CI_PROJECT_DIR/.cache/go/pkg/mod"
+  GOCACHE: "$CI_PROJECT_DIR/.cache/go-build"
+  GOFLAGS: "-mod=mod"
+  GCP_REGION: asia-southeast2
+  GAR_REGION: asia-southeast2
+  GAR_REPOSITORY: boundless-be
+  GAR_AUTO_CREATE_REPOSITORY: "false"
+  CLOUD_RUN_SERVICE: boundless-be
+  CLOUD_RUN_ALLOW_UNAUTHENTICATED: "true"
+
+cache:
+  key: "$CI_COMMIT_REF_SLUG-go"
+  paths:
+    - .cache/go/pkg/mod
+    - .cache/go-build
+
+stages:
+  - test
+  - quality
+  - build
+  - deploy
+
+unit_test:
+  stage: test
+  script:
+    - go version
+    - |
+      go test ./... -coverpkg=./... -coverprofile=coverage.out > go-test.log 2>&1 || {
+        cat go-test.log
+        exit 1
+      }
+      cat go-test.log
+  artifacts:
+    when: always
+    expire_in: 7 days
+    paths:
+      - coverage.out
+      - go-test.log
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "dev"'
+
+sonarqube:
+  stage: quality
   image: sonarsource/sonar-scanner-cli:latest
+  inherit:
+    default: false
+  before_script: []
+  needs:
+    - unit_test
   variables:
     GIT_DEPTH: "0"
+    SONAR_USER_HOME: "$CI_PROJECT_DIR/.sonar"
+    SONAR_HOST_URL: "${SONAR_HOST_URL:-https://sonarcloud.io}"
   script:
-    - sonar-scanner -Dsonar.organization=boundless -Dsonar.projectKey=boundless_boundless-be
+    - |
+      if [ -z "$SONAR_TOKEN" ] || [ -z "$SONAR_PROJECT_KEY" ]; then
+        echo "Skipping Sonar scan: SONAR_TOKEN or SONAR_PROJECT_KEY is not configured."
+        exit 0
+      fi
+    - |
+      sonar-scanner \
+        -Dsonar.projectKey="$SONAR_PROJECT_KEY" \
+        -Dsonar.host.url="$SONAR_HOST_URL" \
+        ${SONAR_ORGANIZATION:+-Dsonar.organization="$SONAR_ORGANIZATION"}
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_BRANCH == "dev"'
+
+build_and_push_image:
+  stage: build
+  image: google/cloud-sdk:slim
+  needs:
+    - unit_test
+  before_script: []
+  script:
+    - touch image.env
+    - test -n "$GCP_PROJECT_ID" || (echo "GCP_PROJECT_ID is required" && exit 1)
+    - test -n "$GAR_REPOSITORY" || (echo "GAR_REPOSITORY is required" && exit 1)
+    - test -n "$CLOUD_RUN_SERVICE" || (echo "CLOUD_RUN_SERVICE is required" && exit 1)
+    - |
+      if [ -z "${GCP_SA_KEY:-}" ] && [ -n "${GCP_SA_KEY_B64:-}" ]; then
+        GCP_SA_KEY="$GCP_SA_KEY_B64"
+      fi
+      test -n "${GCP_SA_KEY:-}" || (echo "GCP_SA_KEY or GCP_SA_KEY_B64 is required" && exit 1)
+      if [ -f "$GCP_SA_KEY" ]; then
+        cp "$GCP_SA_KEY" "$CI_PROJECT_DIR/gcp-key.json"
+      elif echo "$GCP_SA_KEY" | tr -d '\r\n\t ' | grep -q '^{'; then
+        printf "%s" "$GCP_SA_KEY" > "$CI_PROJECT_DIR/gcp-key.json"
+      else
+        echo "$GCP_SA_KEY" | tr -d '\r' | base64 -d > "$CI_PROJECT_DIR/gcp-key.json" || {
+          echo "GCP_SA_KEY must be JSON string, base64-encoded JSON, or GitLab File variable path"
+          exit 1
+        }
+      fi
+      grep -q '"type"[[:space:]]*:[[:space:]]*"service_account"' "$CI_PROJECT_DIR/gcp-key.json" || {
+        echo "GCP_SA_KEY is not a valid service account JSON"
+        exit 1
+      }
+    - export GOOGLE_APPLICATION_CREDENTIALS="$CI_PROJECT_DIR/gcp-key.json"
+    - gcloud auth activate-service-account --key-file="$GOOGLE_APPLICATION_CREDENTIALS"
+    - test -n "$(gcloud auth list --filter=status:ACTIVE --format='value(account)')" || (echo "No active gcloud account after service account activation" && exit 1)
+    - gcloud auth print-access-token >/dev/null || (echo "Failed to obtain OAuth access token from service account key" && exit 1)
+    - |
+      repo_check_output="$(gcloud artifacts repositories describe "$GAR_REPOSITORY" \
+        --location "$GAR_REGION" \
+        --project "$GCP_PROJECT_ID" 2>&1)" || repo_check_status=$?
+      repo_check_status="${repo_check_status:-0}"
+
+      if [ "$repo_check_status" -ne 0 ]; then
+        if echo "$repo_check_output" | grep -qi "NOT_FOUND\\|not found"; then
+          if [ "$GAR_AUTO_CREATE_REPOSITORY" = "true" ]; then
+            gcloud artifacts repositories create "$GAR_REPOSITORY" \
+              --repository-format docker \
+              --location "$GAR_REGION" \
+              --description "Docker repository for boundless-be Cloud Run images" \
+              --project "$GCP_PROJECT_ID" || {
+                echo "Failed to auto-create Artifact Registry repository '$GAR_REPOSITORY'."
+                echo "Ensure the CI service account has artifactregistry.repositories.create permission."
+                echo "Manual one-time setup (run as project admin):"
+                echo "gcloud artifacts repositories create \"$GAR_REPOSITORY\" --repository-format=docker --location=\"$GAR_REGION\" --project=\"$GCP_PROJECT_ID\""
+                echo "Then keep GAR_AUTO_CREATE_REPOSITORY=false for least-privilege CI."
+                exit 1
+              }
+          else
+            echo "Artifact Registry repository '$GAR_REPOSITORY' not found in region '$GAR_REGION'."
+            echo "Create it manually or set GAR_AUTO_CREATE_REPOSITORY=true with artifactregistry.repositories.create permission."
+            echo "Manual one-time setup (run as project admin):"
+            echo "gcloud artifacts repositories create \"$GAR_REPOSITORY\" --repository-format=docker --location=\"$GAR_REGION\" --project=\"$GCP_PROJECT_ID\""
+            exit 1
+          fi
+        else
+          echo "Failed to check Artifact Registry repository '$GAR_REPOSITORY'."
+          echo "$repo_check_output"
+          exit "$repo_check_status"
+        fi
+      fi
+    - gcloud auth configure-docker "${GAR_REGION}-docker.pkg.dev" --quiet
+    - export IMAGE_URI="${GAR_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${GAR_REPOSITORY}/${CLOUD_RUN_SERVICE}:${CI_COMMIT_SHORT_SHA}"
+    - export BUILD_ID="$(gcloud builds submit --project "$GCP_PROJECT_ID" --tag "$IMAGE_URI" --async --format='value(id)' .)"
+    - test -n "$BUILD_ID" || (echo "Failed to get Cloud Build ID" && exit 1)
+    - |
+      while true; do
+        BUILD_STATUS="$(gcloud builds describe "$BUILD_ID" --project "$GCP_PROJECT_ID" --format='value(status)')"
+        echo "Cloud Build status: $BUILD_STATUS"
+        if [ "$BUILD_STATUS" = "SUCCESS" ]; then
+          break
+        fi
+        if [ "$BUILD_STATUS" = "FAILURE" ] || [ "$BUILD_STATUS" = "INTERNAL_ERROR" ] || [ "$BUILD_STATUS" = "CANCELLED" ] || [ "$BUILD_STATUS" = "TIMEOUT" ] || [ "$BUILD_STATUS" = "EXPIRED" ]; then
+          echo "Cloud Build failed with status: $BUILD_STATUS"
+          exit 1
+        fi
+        sleep 5
+      done
+    - printf "IMAGE_URI=%s\n" "$IMAGE_URI" > image.env
+  artifacts:
+    expire_in: 1 day
+    reports:
+      dotenv: image.env
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "dev"'
+
+deploy_cloud_run:
+  stage: deploy
+  image: google/cloud-sdk:slim
+  needs:
+    - build_and_push_image
+  before_script: []
+  script:
+    - |
+      test -n "$GCP_PROJECT_ID" || (echo "GCP_PROJECT_ID is required" && exit 1)
+      test -n "$GCP_REGION" || (echo "GCP_REGION is required" && exit 1)
+      test -n "$CLOUD_RUN_SERVICE" || (echo "CLOUD_RUN_SERVICE is required" && exit 1)
+      test -n "$IMAGE_URI" || (echo "IMAGE_URI is missing from previous stage" && exit 1)
+      if [ -z "${GCP_SA_KEY:-}" ] && [ -n "${GCP_SA_KEY_B64:-}" ]; then
+        GCP_SA_KEY="$GCP_SA_KEY_B64"
+      fi
+      test -n "${GCP_SA_KEY:-}" || (echo "GCP_SA_KEY or GCP_SA_KEY_B64 is required" && exit 1)
+      if [ -f "$GCP_SA_KEY" ]; then
+        cp "$GCP_SA_KEY" "$CI_PROJECT_DIR/gcp-key.json"
+      elif echo "$GCP_SA_KEY" | tr -d '\r\n\t ' | grep -q '^{'; then
+        printf "%s" "$GCP_SA_KEY" > "$CI_PROJECT_DIR/gcp-key.json"
+      else
+        echo "$GCP_SA_KEY" | tr -d '\r' | base64 -d > "$CI_PROJECT_DIR/gcp-key.json" || {
+          echo "GCP_SA_KEY must be JSON string, base64-encoded JSON, or GitLab File variable path"
+          exit 1
+        }
+      fi
+      grep -q '"type"[[:space:]]*:[[:space:]]*"service_account"' "$CI_PROJECT_DIR/gcp-key.json" || {
+        echo "GCP_SA_KEY is not a valid service account JSON"
+        exit 1
+      }
+      export GOOGLE_APPLICATION_CREDENTIALS="$CI_PROJECT_DIR/gcp-key.json"
+      gcloud auth activate-service-account --key-file="$GOOGLE_APPLICATION_CREDENTIALS"
+      test -n "$(gcloud auth list --filter=status:ACTIVE --format='value(account)')" || {
+        echo "No active gcloud account after service account activation"
+        exit 1
+      }
+      gcloud auth print-access-token >/dev/null || {
+        echo "Failed to obtain OAuth access token from service account key"
+        exit 1
+      }
+      DEPLOY_ARGS=(
+        run deploy "$CLOUD_RUN_SERVICE"
+        --image "$IMAGE_URI"
+        --project "$GCP_PROJECT_ID"
+        --region "$GCP_REGION"
+        --platform managed
+        --quiet
+      )
+
+      if [ "$CLOUD_RUN_ALLOW_UNAUTHENTICATED" = "true" ]; then
+        DEPLOY_ARGS+=(--allow-unauthenticated)
+      else
+        DEPLOY_ARGS+=(--no-allow-unauthenticated)
+      fi
+
+      if [ -n "${CLOUD_RUN_ENV_VARS:-}" ]; then
+        DEPLOY_ARGS+=(--set-env-vars "$CLOUD_RUN_ENV_VARS")
+      fi
+
+      gcloud "${DEPLOY_ARGS[@]}"
+  environment:
+    name: development
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "dev"'

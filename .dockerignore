@@ -1,0 +1,15 @@
+.git
+.gitignore
+.github
+.gitlab
+.scannerwork
+.claude
+.env
+.env.*
+coverage.out
+coverage.html
+*.log
+.gocache
+.gocache_local
+tmp
+artifacts
