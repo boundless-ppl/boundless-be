@@ -226,3 +226,29 @@ func TestAdminPaymentForbiddenForUserApi(t *testing.T) {
 		t.Fatalf("expected %d, got %d", http.StatusForbidden, rec.Code)
 	}
 }
+
+func TestAdminPaymentStatusForbiddenForUserApi(t *testing.T) {
+	handler := api.NewHandler(api.Dependencies{UserRepo: newTestUserRepo(), PaymentRepo: newTestPaymentRepo()})
+	tokens, _ := service.NewHMACTokenManager("test-secret").IssueTokens("user-1", "user")
+	req := httptest.NewRequest(http.MethodPatch, "/admin/payments/11111111-1111-1111-1111-111111111111/status", bytes.NewBufferString(`{"status":"success"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+tokens.AccessToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected %d, got %d", http.StatusForbidden, rec.Code)
+	}
+}
+
+func TestAdminPaymentStatusUnauthorizedWithoutTokenApi(t *testing.T) {
+	handler := api.NewHandler(api.Dependencies{UserRepo: newTestUserRepo(), PaymentRepo: newTestPaymentRepo()})
+	req := httptest.NewRequest(http.MethodPatch, "/admin/payments/11111111-1111-1111-1111-111111111111/status", bytes.NewBufferString(`{"status":"success"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected %d, got %d", http.StatusUnauthorized, rec.Code)
+	}
+}

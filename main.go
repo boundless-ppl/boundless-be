@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"boundless-be/admin"
 	"boundless-be/api"
 	"boundless-be/database"
 	"boundless-be/debug"
@@ -21,7 +22,7 @@ import (
 )
 
 func main() {
-	if err := godotenv.Overload(".env"); err != nil && !os.IsNotExist(err) {
+	if err := godotenv.Load(".env"); err != nil && !os.IsNotExist(err) {
 		log.Fatalf("failed to load .env: %v", err)
 	}
 
@@ -91,6 +92,15 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
+
+	adminEngine, err := admin.Setup(handler, databaseURL, db)
+	if err != nil {
+		log.Printf("admin panel disabled: %v", err)
+	} else {
+		defer adminEngine.PostgresqlConnection().Close()
+		log.Printf("admin panel ready")
+	}
+
 	addr := ":" + port
 
 	srv := &http.Server{
