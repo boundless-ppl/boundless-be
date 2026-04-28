@@ -18,11 +18,12 @@ type Dependencies struct {
 	RecRepo          repository.RecommendationRepository
 	PaymentRepo      repository.PaymentRepository
 	DreamTrackerRepo repository.DreamTrackerRepository
+	ScholarshipRepo  repository.ScholarshipRepository
 }
 
 func NewHandler(dep Dependencies) *gin.Engine {
 	router := gin.New()
-	router.MaxMultipartMemory = 1 << 20 
+	router.MaxMultipartMemory = 1 << 20
 	origins := normalizeAllowedOrigins(os.Getenv("CORS_ALLOWED_ORIGINS"))
 	router.Use(gin.Recovery())
 
@@ -63,6 +64,10 @@ func NewHandler(dep Dependencies) *gin.Engine {
 
 	if dep.DreamTrackerRepo != nil && dep.UserRepo != nil {
 		registerDreamTrackerRoutes(router, dep.DreamTrackerRepo, dep.UserRepo)
+	}
+
+	if dep.ScholarshipRepo != nil {
+		registerScholarshipRoutes(router, dep.ScholarshipRepo)
 	}
 
 	return router
