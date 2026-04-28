@@ -20,4 +20,6 @@ func registerAuthRoutes(router *gin.Engine, userRepo repository.UserRepository, 
 	router.POST("/auth/refresh", strictLimit, authController.Refresh)
 	router.POST("/auth/logout", authMiddleware.RequireAuth(), authController.Logout)
 	router.GET("/auth/me", authMiddleware.RequireAuth(), authController.Me)
+	router.PUT("/auth/me", authMiddleware.RequireAuth(), authController.UpdateProfile)
+	router.PUT("/auth/me/password", authMiddleware.RequireAuth(), authController.ChangePassword)
 }

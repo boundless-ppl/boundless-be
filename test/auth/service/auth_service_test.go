@@ -339,6 +339,159 @@ func TestNewAuthServiceMissingSecretService(t *testing.T) {
 	}
 }
 
+// ── UpdateProfile ────────────────────────────────────────────────────────────
+
+func TestUpdateProfileSuccessService(t *testing.T) {
+	userRepo := newTestUserRepoService()
+	authService := service.NewAuthService(userRepo)
+
+	_ = authService.Register(context.Background(), "Alice Doe", "user", "alice@example.com", "Secret123!")
+	user, _ := userRepo.FindByEmail(context.Background(), "alice@example.com")
+
+	err := authService.UpdateProfile(context.Background(), user.UserID, "Alice Updated")
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+
+	updated, _ := userRepo.FindByID(context.Background(), user.UserID)
+	if updated.NamaLengkap != "Alice Updated" {
+		t.Fatalf("expected updated name, got %s", updated.NamaLengkap)
+	}
+}
+
+func TestUpdateProfileUserNotFoundService(t *testing.T) {
+	userRepo := newTestUserRepoService()
+	authService := service.NewAuthService(userRepo)
+
+	err := authService.UpdateProfile(context.Background(), "non-existent-id", "Alice Updated")
+	if !errors.Is(err, service.ErrInvalidCredentials) {
+		t.Fatalf("expected %v, got %v", service.ErrInvalidCredentials, err)
+	}
+}
+
+func TestUpdateProfileRepoUpdateErrorService(t *testing.T) {
+	userRepo := newTestUserRepoService()
+	authService := service.NewAuthService(userRepo)
+
+	_ = authService.Register(context.Background(), "Alice Doe", "user", "alice@example.com", "Secret123!")
+	user, _ := userRepo.FindByEmail(context.Background(), "alice@example.com")
+
+	userRepo.updateErr = errors.New("db error")
+	err := authService.UpdateProfile(context.Background(), user.UserID, "Alice Updated")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+}
+
+// ── ChangePassword ───────────────────────────────────────────────────────────
+
+func TestChangePasswordSuccessService(t *testing.T) {
+	userRepo := newTestUserRepoService()
+	authService := service.NewAuthService(userRepo)
+
+	_ = authService.Register(context.Background(), "Alice Doe", "user", "alice@example.com", "Secret123!")
+	user, _ := userRepo.FindByEmail(context.Background(), "alice@example.com")
+
+	err := authService.ChangePassword(context.Background(), user.UserID, "Secret123!", "NewSecret456@")
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+}
+
+func TestChangePasswordNewHashStoredService(t *testing.T) {
+	userRepo := newTestUserRepoService()
+	authService := service.NewAuthService(userRepo)
+
+	_ = authService.Register(context.Background(), "Alice Doe", "user", "alice@example.com", "Secret123!")
+	user, _ := userRepo.FindByEmail(context.Background(), "alice@example.com")
+	oldHash := user.PasswordHash
+
+	_ = authService.ChangePassword(context.Background(), user.UserID, "Secret123!", "NewSecret456@")
+
+	updated, _ := userRepo.FindByID(context.Background(), user.UserID)
+	if updated.PasswordHash == oldHash {
+		t.Fatal("expected password hash to change after ChangePassword")
+	}
+}
+
+func TestChangePasswordOldPasswordNoLongerWorksService(t *testing.T) {
+	userRepo := newTestUserRepoService()
+	authService := service.NewAuthService(userRepo)
+
+	_ = authService.Register(context.Background(), "Alice Doe", "user", "alice@example.com", "Secret123!")
+	user, _ := userRepo.FindByEmail(context.Background(), "alice@example.com")
+	_ = authService.ChangePassword(context.Background(), user.UserID, "Secret123!", "NewSecret456@")
+
+	_, err := authService.Login(context.Background(), "alice@example.com", "Secret123!")
+	if !errors.Is(err, service.ErrInvalidCredentials) {
+		t.Fatalf("expected old password to be rejected, got %v", err)
+	}
+}
+
+func TestChangePasswordNewPasswordWorksService(t *testing.T) {
+	userRepo := newTestUserRepoService()
+	authService := service.NewAuthService(userRepo)
+
+	_ = authService.Register(context.Background(), "Alice Doe", "user", "alice@example.com", "Secret123!")
+	user, _ := userRepo.FindByEmail(context.Background(), "alice@example.com")
+	_ = authService.ChangePassword(context.Background(), user.UserID, "Secret123!", "NewSecret456@")
+
+	_, err := authService.Login(context.Background(), "alice@example.com", "NewSecret456@")
+	if err != nil {
+		t.Fatalf("expected new password to work, got %v", err)
+	}
+}
+
+func TestChangePasswordUserNotFoundService(t *testing.T) {
+	userRepo := newTestUserRepoService()
+	authService := service.NewAuthService(userRepo)
+
+	err := authService.ChangePassword(context.Background(), "non-existent-id", "Secret123!", "NewSecret456@")
+	if !errors.Is(err, service.ErrInvalidCredentials) {
+		t.Fatalf("expected %v, got %v", service.ErrInvalidCredentials, err)
+	}
+}
+
+func TestChangePasswordWrongCurrentPasswordService(t *testing.T) {
+	userRepo := newTestUserRepoService()
+	authService := service.NewAuthService(userRepo)
+
+	_ = authService.Register(context.Background(), "Alice Doe", "user", "alice@example.com", "Secret123!")
+	user, _ := userRepo.FindByEmail(context.Background(), "alice@example.com")
+
+	err := authService.ChangePassword(context.Background(), user.UserID, "WrongPass1!", "NewSecret456@")
+	if !errors.Is(err, service.ErrWrongCurrentPassword) {
+		t.Fatalf("expected %v, got %v", service.ErrWrongCurrentPassword, err)
+	}
+}
+
+func TestChangePasswordWeakNewPasswordService(t *testing.T) {
+	userRepo := newTestUserRepoService()
+	authService := service.NewAuthService(userRepo)
+
+	_ = authService.Register(context.Background(), "Alice Doe", "user", "alice@example.com", "Secret123!")
+	user, _ := userRepo.FindByEmail(context.Background(), "alice@example.com")
+
+	err := authService.ChangePassword(context.Background(), user.UserID, "Secret123!", "weak")
+	if !errors.Is(err, service.ErrInvalidInput) {
+		t.Fatalf("expected %v, got %v", service.ErrInvalidInput, err)
+	}
+}
+
+func TestChangePasswordRepoUpdateErrorService(t *testing.T) {
+	userRepo := newTestUserRepoService()
+	authService := service.NewAuthService(userRepo)
+
+	_ = authService.Register(context.Background(), "Alice Doe", "user", "alice@example.com", "Secret123!")
+	user, _ := userRepo.FindByEmail(context.Background(), "alice@example.com")
+
+	userRepo.updateErr = errors.New("db error")
+	err := authService.ChangePassword(context.Background(), user.UserID, "Secret123!", "NewSecret456@")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+}
+
 func TestLoginAttemptLimitAndLockService(t *testing.T) {
 	userRepo := newTestUserRepoService()
 	authService := service.NewAuthService(userRepo)

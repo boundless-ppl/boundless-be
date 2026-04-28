@@ -51,3 +51,50 @@ func TestErrorResponseJsonMappingDto(t *testing.T) {
 		t.Fatalf("unexpected json: %s", string(raw))
 	}
 }
+
+func TestUpdateProfileRequestJsonMappingDto(t *testing.T) {
+	payload := `{"nama_lengkap":"Alice Updated"}`
+	var req dto.UpdateProfileRequest
+	if err := json.Unmarshal([]byte(payload), &req); err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if req.NamaLengkap != "Alice Updated" {
+		t.Fatalf("unexpected nama_lengkap: %s", req.NamaLengkap)
+	}
+}
+
+func TestUpdateProfileRequestMissingFieldDto(t *testing.T) {
+	payload := `{}`
+	var req dto.UpdateProfileRequest
+	if err := json.Unmarshal([]byte(payload), &req); err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if req.NamaLengkap != "" {
+		t.Fatalf("expected empty nama_lengkap, got %s", req.NamaLengkap)
+	}
+}
+
+func TestChangePasswordRequestJsonMappingDto(t *testing.T) {
+	payload := `{"current_password":"OldPass1!","new_password":"NewPass1!"}`
+	var req dto.ChangePasswordRequest
+	if err := json.Unmarshal([]byte(payload), &req); err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if req.CurrentPassword != "OldPass1!" {
+		t.Fatalf("unexpected current_password: %s", req.CurrentPassword)
+	}
+	if req.NewPassword != "NewPass1!" {
+		t.Fatalf("unexpected new_password: %s", req.NewPassword)
+	}
+}
+
+func TestChangePasswordRequestMissingFieldsDto(t *testing.T) {
+	payload := `{}`
+	var req dto.ChangePasswordRequest
+	if err := json.Unmarshal([]byte(payload), &req); err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if req.CurrentPassword != "" || req.NewPassword != "" {
+		t.Fatalf("expected empty fields, got current=%s new=%s", req.CurrentPassword, req.NewPassword)
+	}
+}
